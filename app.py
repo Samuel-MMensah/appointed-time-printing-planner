@@ -121,8 +121,7 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Dashboard", "Plan Job", "Gantt View"],
-    icon_position="left"
+    ["Dashboard", "Plan Job", "Gantt View"]
 )
 
 # Filter by sales rep in sidebar
