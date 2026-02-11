@@ -3,19 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import math
-import os
 from supabase import create_client, Client
-
-# Initialize Supabase client
-SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-
-supabase_client: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception as e:
-        st.warning(f"Supabase connection issue: {e}. Using session state only.")
 
 # Page configuration
 st.set_page_config(
@@ -24,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Machine data with impressions per hour (rate)
+# Machine data with verified impressions per hour rates
 # All machines have fixed 2-hour setup time
 MACHINE_DATA = {
     'SM102-CX FOUR COLOUR': {'rate': 8000},
@@ -45,67 +33,60 @@ MACHINE_DATA = {
 }
 
 SETUP_HOURS = 2.0  # Fixed setup time for all machines
+CURRENCY = "GH₵"  # Ghana Cedis
+
+# Initialize Supabase client using st.secrets
+@st.cache_resource
+def init_supabase():
+    """Initialize Supabase client with st.secrets"""
+    try:
+        url = st.secrets.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY")
+        
+        if not url or not key:
+            st.warning("⚠️ Supabase credentials not found in secrets. Using session state only.")
+            return None
+        
+        return create_client(url, key)
+    except Exception as e:
+        st.warning(f"⚠️ Supabase connection issue: {e}")
+        return None
+
+supabase: Client = init_supabase()
 
 # Initialize session state
 if 'jobs' not in st.session_state:
     st.session_state.jobs = []
+if 'sales_reps' not in st.session_state:
+    st.session_state.sales_reps = set()
 if 'monthly_budget' not in st.session_state:
-    st.session_state.monthly_budget = 150000
+    st.session_state.monthly_budget = 100000  # GH₵
 if 'machine_load' not in st.session_state:
     st.session_state.machine_load = {machine: [] for machine in MACHINE_DATA.keys()}
-if 'supabase_loaded' not in st.session_state:
-    st.session_state.supabase_loaded = False
-
-# Load jobs from Supabase on first run
-if supabase_client and not st.session_state.supabase_loaded:
-    try:
-        jobs_from_db = load_jobs_from_supabase()
-        st.session_state.jobs = jobs_from_db
-        
-        # Rebuild machine load from loaded jobs
-        for job in st.session_state.jobs:
-            for task in job['schedule']:
-                process = task['process']
-                st.session_state.machine_load[process].append({
-                    'job': job['name'],
-                    'impressions': job['impressions'],
-                    'start': task['start'],
-                    'end': task['end'],
-                    'duration': task['duration']
-                })
-        
-        st.session_state.supabase_loaded = True
-    except Exception as e:
-        st.warning(f"Could not load from Supabase: {e}")
-        st.session_state.supabase_loaded = True
+if 'db_synced' not in st.session_state:
+    st.session_state.db_synced = False
 
 # Helper functions
 def calculate_impressions(finished_qty, ups, overs_pct):
-    """Calculate total impressions using formula: ceil(Qty/Ups) × (1 + Overs%)"""
-    base_impressions = math.ceil(finished_qty / ups)
-    total_impressions = base_impressions * (1 + overs_pct / 100)
-    return total_impressions
+    """Calculate impressions using skillet math: ceil(Qty/Ups) × (1 + Overs%)"""
+    sheets = math.ceil(finished_qty / ups)
+    impressions = sheets * (1 + overs_pct / 100)
+    return int(impressions)
 
 def calculate_processing_time(machine, impressions):
-    """Calculate total time = setup (2h) + run time"""
+    """Calculate total time = setup + run time"""
     if machine not in MACHINE_DATA:
         return 0
     rate = MACHINE_DATA[machine]['rate']
     run_time = impressions / rate
     return SETUP_HOURS + run_time
 
-def calculate_job_schedule(job_name, impressions, processes, start_time=None):
-    """Calculate sequential schedule: each step starts when previous finishes"""
-    if start_time is None:
-        start_time = datetime.now()
-    
+def calculate_job_schedule(job_name, impressions, processes):
+    """Calculate sequential schedule where each process starts when previous ends"""
     schedule = []
-    current_time = start_time
+    current_time = datetime.now()
     
     for process in processes:
-        if process not in MACHINE_DATA:
-            continue
-        
         duration = calculate_processing_time(process, impressions)
         end_time = current_time + timedelta(hours=duration)
         
@@ -121,421 +102,390 @@ def calculate_job_schedule(job_name, impressions, processes, start_time=None):
     
     return schedule
 
-def save_job_to_supabase(job_name, sales_rep, impressions, finished_qty, ups_per_sheet, sheets_per_packet, overs_pct, processes, contract_value, target_deadline, schedule):
-    """Save job and its processes to Supabase"""
-    if not supabase_client:
-        return None
+def save_job_to_db(job_data):
+    """Save job to Supabase"""
+    if not supabase:
+        return False
     
     try:
-        # Insert job
-        job_data = {
-            'name': job_name,
-            'sales_rep': sales_rep,
-            'impressions': int(impressions),
-            'finished_qty': finished_qty,
-            'ups_per_sheet': ups_per_sheet,
-            'sheets_per_packet': sheets_per_packet,
-            'overs_pct': float(overs_pct),
-            'contract_value': float(contract_value),
-            'target_deadline': target_deadline.isoformat() if target_deadline else None,
-            'created_at': datetime.now().isoformat()
-        }
-        
-        response = supabase_client.table('jobs').insert(job_data).execute()
-        job_id = response.data[0]['id'] if response.data else None
-        
-        if job_id:
-            # Insert job processes
-            for idx, process in enumerate(processes):
-                task = schedule[idx]
-                process_data = {
-                    'job_id': job_id,
-                    'process_name': process,
-                    'sequence_order': idx + 1,
-                    'start_time': task['start'].isoformat(),
-                    'end_time': task['end'].isoformat(),
-                    'duration_hours': float(task['duration'])
-                }
-                supabase_client.table('job_processes').insert(process_data).execute()
-        
-        return job_id
+        response = supabase.table('jobs').insert(job_data).execute()
+        return True
     except Exception as e:
-        st.warning(f"Error saving to Supabase: {e}")
-        return None
+        st.error(f"Error saving job: {e}")
+        return False
 
-def load_jobs_from_supabase():
+def load_jobs_from_db():
     """Load all jobs from Supabase"""
-    if not supabase_client:
+    if not supabase:
         return []
     
     try:
-        response = supabase_client.table('jobs').select('*').execute()
+        response = supabase.table('jobs').select('*').execute()
         jobs = []
         
-        for job_record in response.data:
-            # Load processes for this job
-            processes_response = supabase_client.table('job_processes').select('*').eq('job_id', job_record['id']).execute()
-            
-            processes = [p['process_name'] for p in sorted(processes_response.data, key=lambda x: x['sequence_order'])]
-            
+        for record in response.data:
+            # Parse schedule from stored JSON
             schedule = []
-            for p in sorted(processes_response.data, key=lambda x: x['sequence_order']):
-                schedule.append({
-                    'process': p['process_name'],
-                    'start': datetime.fromisoformat(p['start_time']),
-                    'end': datetime.fromisoformat(p['end_time']),
-                    'duration': p['duration_hours'],
-                    'impressions': job_record['impressions']
-                })
-            
-            calculated_finish = schedule[-1]['end'] if schedule else datetime.fromisoformat(job_record['created_at'])
-            target_deadline = datetime.fromisoformat(job_record['target_deadline']) if job_record['target_deadline'] else None
-            on_time = True if target_deadline is None else calculated_finish <= target_deadline
+            if 'schedule' in record and record['schedule']:
+                for task in record['schedule']:
+                    schedule.append({
+                        'process': task['process'],
+                        'start': datetime.fromisoformat(task['start']),
+                        'end': datetime.fromisoformat(task['end']),
+                        'duration': task['duration'],
+                        'impressions': task['impressions']
+                    })
             
             job = {
-                'name': job_record['name'],
-                'sales_rep': job_record['sales_rep'],
-                'impressions': job_record['impressions'],
-                'processes': processes,
-                'contract_value': job_record['contract_value'],
+                'id': record.get('id'),
+                'name': record['name'],
+                'sales_rep': record['sales_rep'],
+                'impressions': record['impressions'],
+                'processes': record.get('processes', []),
+                'contract_value': record.get('contract_value', 0),
                 'schedule': schedule,
-                'target_deadline': target_deadline,
-                'calculated_finish': calculated_finish,
-                'on_time': on_time,
-                'created_at': datetime.fromisoformat(job_record['created_at'])
+                'target_deadline': datetime.fromisoformat(record['target_deadline']) if record.get('target_deadline') else None,
+                'created_at': datetime.fromisoformat(record['created_at'])
             }
             jobs.append(job)
+            st.session_state.sales_reps.add(record['sales_rep'])
         
         return jobs
     except Exception as e:
-        st.warning(f"Error loading jobs from Supabase: {e}")
+        st.warning(f"Error loading jobs from database: {e}")
         return []
 
-def add_job(job_name, sales_rep, impressions, processes, contract_value, target_deadline=None, finished_qty=None, ups_per_sheet=None, sheets_per_packet=None, overs_pct=None):
-    """Add a new job to the system (both local and Supabase)"""
-    schedule = calculate_job_schedule(job_name, impressions, processes)
-    
-    calculated_finish = schedule[-1]['end'] if schedule else datetime.now()
-    on_time = True if target_deadline is None else calculated_finish <= target_deadline
+def add_job(name, sales_rep, impressions, processes, contract_value, target_deadline=None):
+    """Add job to session state and database"""
+    schedule = calculate_job_schedule(name, impressions, processes)
     
     job = {
-        'name': job_name,
+        'name': name,
         'sales_rep': sales_rep,
         'impressions': impressions,
         'processes': processes,
         'contract_value': contract_value,
         'schedule': schedule,
         'target_deadline': target_deadline,
-        'calculated_finish': calculated_finish,
-        'on_time': on_time,
         'created_at': datetime.now()
     }
     
-    st.session_state.jobs.append(job)
+    # Save to database
+    db_job = {
+        'name': name,
+        'sales_rep': sales_rep,
+        'impressions': impressions,
+        'processes': processes,
+        'contract_value': float(contract_value),
+        'schedule': [
+            {
+                'process': t['process'],
+                'start': t['start'].isoformat(),
+                'end': t['end'].isoformat(),
+                'duration': t['duration'],
+                'impressions': t['impressions']
+            }
+            for t in schedule
+        ],
+        'target_deadline': target_deadline.isoformat() if target_deadline else None,
+        'created_at': datetime.now().isoformat()
+    }
     
-    # Save to Supabase if available
-    if supabase_client:
-        save_job_to_supabase(
-            job_name, sales_rep, impressions, finished_qty or 0, ups_per_sheet or 0, sheets_per_packet or 0, overs_pct or 5.0,
-            processes, contract_value, target_deadline, schedule
-        )
+    if save_job_to_db(db_job):
+        st.session_state.jobs.append(job)
+        st.session_state.sales_reps.add(sales_rep)
+        
+        # Update machine load
+        for task in schedule:
+            st.session_state.machine_load[task['process']].append({
+                'job': name,
+                'start': task['start'],
+                'end': task['end'],
+                'duration': task['duration']
+            })
+        
+        return True
+    return False
+
+# Load jobs from database on startup
+if not st.session_state.db_synced and supabase:
+    st.session_state.jobs = load_jobs_from_db()
+    st.session_state.db_synced = True
     
-    # Update machine load
-    for task in schedule:
-        process = task['process']
-        st.session_state.machine_load[process].append({
-            'job': job_name,
-            'impressions': impressions,
-            'start': task['start'],
-            'end': task['end'],
-            'duration': task['duration']
-        })
-    
-    return job
+    # Rebuild machine load
+    for job in st.session_state.jobs:
+        for task in job['schedule']:
+            st.session_state.machine_load[task['process']].append({
+                'job': job['name'],
+                'start': task['start'],
+                'end': task['end'],
+                'duration': task['duration']
+            })
 
-def get_machine_status_color(machine):
-    """Determine stoplight color based on machine load:
-    Green: 0 hours
-    Yellow: 0 < load < 2 hours
-    Red: load >= 24 hours
-    """
-    total_load = 0
-    for job_load in st.session_state.machine_load[machine]:
-        total_load += job_load['duration']
-    
-    if total_load == 0:
-        return "Green", "🟢"
-    elif total_load < 2:
-        return "Yellow", "🟡"
-    else:
-        return "Red", "🔴"
+# Main UI
+st.title("🏭 Appointed Time Printing - Job Planning System")
 
-# Sidebar navigation
-st.sidebar.title("Appointed Time Printing")
-st.sidebar.markdown("---")
+# Sidebar configuration
+st.sidebar.markdown("### Configuration")
 
-page = st.sidebar.radio("Navigate", ["Dashboard", "Plan Job", "Gantt View"])
+# Sales rep filter
+sales_rep_list = sorted(list(st.session_state.sales_reps)) if st.session_state.sales_reps else ["All"]
+selected_rep = st.sidebar.selectbox(
+    "Filter by Sales Rep",
+    ["All"] + sales_rep_list
+)
 
-# Dynamic sales rep filter
-sales_reps = sorted(list(set([job['sales_rep'] for job in st.session_state.jobs])))
-if page in ["Dashboard", "Gantt View"]:
-    selected_rep = st.sidebar.selectbox(
-        "Filter by Sales Rep",
-        ["All"] + sales_reps if sales_reps else ["All"]
-    )
-else:
-    selected_rep = "All"
-
-st.sidebar.markdown("---")
-
-# Monthly budget configuration
-st.sidebar.markdown("### Financial Setup")
+# Budget input
 monthly_budget = st.sidebar.number_input(
-    "Monthly Budget Target ($)",
+    f"Monthly Budget Target ({CURRENCY})",
     value=st.session_state.monthly_budget,
-    min_value=10000,
     step=10000
 )
 st.session_state.monthly_budget = monthly_budget
 
-# PAGE 1: DASHBOARD
-if page == "Dashboard":
-    st.title("Global Production View")
-    st.markdown("Real-time machine status and production analytics")
+# Navigation tabs
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📈 Gantt View"])
+
+# ==================== TAB 1: DASHBOARD ====================
+with tab1:
+    st.header("Global Production View - Stoplight System")
     
-    # Financial summary
+    # Calculate financial metrics
     total_revenue = sum(job['contract_value'] for job in st.session_state.jobs)
-    revenue_gap = st.session_state.monthly_budget - total_revenue
+    revenue_gap = monthly_budget - total_revenue
     
+    # Display metrics
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(
-            "Projected Revenue",
-            f"${total_revenue:,.0f}",
-            delta=f"${revenue_gap:,.0f} gap",
-            delta_color="inverse"
-        )
+        st.metric("Projected Revenue", f"{CURRENCY}{total_revenue:,.0f}")
     with col2:
-        st.metric("Budget Target", f"${st.session_state.monthly_budget:,.0f}")
+        st.metric("Budgeted Target", f"{CURRENCY}{monthly_budget:,.0f}")
     with col3:
-        pct_of_budget = (total_revenue / st.session_state.monthly_budget * 100) if st.session_state.monthly_budget > 0 else 0
-        st.metric("Budget %", f"{pct_of_budget:.1f}%")
+        status = "🟢" if revenue_gap <= 0 else "🟡" if revenue_gap < monthly_budget * 0.2 else "🔴"
+        st.metric(f"{status} Revenue Gap", f"{CURRENCY}{max(0, revenue_gap):,.0f}")
     
-    st.markdown("---")
-    
-    # On-Time Delivery %
-    if st.session_state.jobs:
-        on_time_jobs = sum(1 for job in st.session_state.jobs if job['on_time'])
-        total_jobs = len(st.session_state.jobs)
-        otd = (on_time_jobs / total_jobs * 100)
-        
-        st.metric("On-Time Delivery %", f"{otd:.1f}%")
-    
-    st.markdown("---")
-    
-    # Stoplight System - Machine Status Table
-    st.markdown("### Stoplight System - Machine Status")
+    # Stoplight system
+    st.subheader("Machine Status (Stoplight System)")
     
     stoplight_data = []
     for machine in sorted(MACHINE_DATA.keys()):
-        status_color, symbol = get_machine_status_color(machine)
+        loads = st.session_state.machine_load.get(machine, [])
+        total_load = sum(task['duration'] for task in loads)
         
-        total_load = sum(job['duration'] for job in st.session_state.machine_load[machine])
-        job_count = len(st.session_state.machine_load[machine])
+        if total_load == 0:
+            status = "🟢 Available"
+            color = "green"
+        elif total_load < 2:
+            status = "🟡 Low Load"
+            color = "yellow"
+        else:
+            status = "🔴 Heavy Load"
+            color = "red"
         
         stoplight_data.append({
-            'Status': f"{symbol} {status_color}",
             'Machine': machine,
-            'Rate (imp/hr)': MACHINE_DATA[machine]['rate'],
-            'Load (hours)': f"{total_load:.1f}",
-            'Jobs': job_count
+            'Status': status,
+            'Current Load (hrs)': f"{total_load:.1f}"
         })
     
-    df_stoplight = pd.DataFrame(stoplight_data)
-    st.dataframe(df_stoplight, use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(stoplight_data), use_container_width=True, hide_index=True)
     
-    st.markdown("---")
+    # Production summary
+    st.subheader("Production Summary")
     
-    # Production table
-    if st.session_state.jobs:
-        st.markdown("### Production Schedule")
+    filtered_jobs = [j for j in st.session_state.jobs if selected_rep == "All" or j['sales_rep'] == selected_rep]
+    
+    summary_data = []
+    for job in filtered_jobs:
+        finish_time = job['schedule'][-1]['end'] if job['schedule'] else None
+        status = "✅" if job['target_deadline'] is None or finish_time <= job['target_deadline'] else "❌"
         
-        jobs_to_display = st.session_state.jobs
-        if selected_rep != "All":
-            jobs_to_display = [job for job in st.session_state.jobs if job['sales_rep'] == selected_rep]
-        
-        if jobs_to_display:
-            production_data = []
-            for job in jobs_to_display:
-                status = "✅ On-Time" if job['on_time'] else "❌ Late"
-                production_data.append({
-                    'Job Name': job['name'],
-                    'Sales Rep': job['sales_rep'],
-                    'Start': job['schedule'][0]['start'].strftime('%m/%d %H:%M') if job['schedule'] else 'N/A',
-                    'Realistic Finish': job['calculated_finish'].strftime('%m/%d %H:%M'),
-                    'Status': status,
-                    'Revenue': f"${job['contract_value']:,.0f}"
-                })
-            
-            st.dataframe(pd.DataFrame(production_data), use_container_width=True, hide_index=True)
+        summary_data.append({
+            'Job Name': job['name'],
+            'Sales Rep': job['sales_rep'],
+            'Start': job['schedule'][0]['start'].strftime('%Y-%m-%d %H:%M') if job['schedule'] else '-',
+            'Realistic Finish': finish_time.strftime('%Y-%m-%d %H:%M') if finish_time else '-',
+            'Status': status,
+            f'Revenue ({CURRENCY})': f"{job['contract_value']:,.0f}"
+        })
+    
+    if summary_data:
+        st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("No jobs scheduled yet.")
 
-# PAGE 2: PLAN JOB
-elif page == "Plan Job":
-    st.title("Plan New Job")
-    st.markdown("Create a job with skillet math and scheduling")
+# ==================== TAB 2: PLAN JOB ====================
+with tab2:
+    st.header("Plan New Job - Advanced Routing Engine")
     
     with st.form("job_form", clear_on_submit=True):
+        st.subheader("Job Information")
         col1, col2 = st.columns(2)
         
         with col1:
-            job_name = st.text_input("Job Name", placeholder="e.g., Acme Corp Brochures")
-            sales_rep = st.selectbox(
-                "Sales Rep",
-                ["John Smith", "Sarah Johnson", "Mike Davis", "Emma Wilson", "Other"]
-            )
+            job_name = st.text_input("Job Name", placeholder="e.g., Client A - Brochure Run 2025")
+            sales_rep = st.selectbox("Sales Rep Name", 
+                                     ["John Smith", "Sarah Johnson", "Mike Davis", "Emma Wilson", "Other"])
             if sales_rep == "Other":
                 sales_rep = st.text_input("Enter Sales Rep Name")
         
         with col2:
-            contract_value = st.number_input("Contract Value ($)", min_value=100, value=5000, step=100)
-            target_deadline = st.date_input("Target Delivery Date (Optional)", value=None)
+            contract_value = st.number_input(f"Contract Value ({CURRENCY})", min_value=0.0, value=5000.0, step=100.0)
+            target_deadline = st.date_input("Target Delivery Date (Optional)")
         
-        st.markdown("---")
-        st.markdown("### Skillet Math Calculation")
-        st.markdown("**Formula:** Impressions = ⌈Quantity ÷ Ups⌉ × (1 + Overs%)")
+        st.subheader("Job Specifications - Skillet Math Formula")
+        st.markdown(f"**Impressions = ⌈Finished Qty ÷ Ups⌉ × (1 + Overs%)**")
         
         col1, col2, col3, col4 = st.columns(4)
+        
         with col1:
             finished_qty = st.number_input("Finished Quantity", min_value=100, value=100000, step=1000)
+        
         with col2:
             ups = st.number_input("Ups-per-Sheet", min_value=1, value=12, step=1)
+        
         with col3:
             overs_pct = st.number_input("Overs %", min_value=0.0, value=5.0, step=0.5)
+        
         with col4:
-            st.write("")  # Spacer
+            sheets_per_packet = st.number_input("Sheets-per-Packet", min_value=1, value=100, step=1)
         
         # Calculate impressions
         impressions = calculate_impressions(finished_qty, ups, overs_pct)
-        st.info(f"**Calculated Impressions:** {impressions:,.0f}")
+        packets = math.ceil(impressions / sheets_per_packet)
         
-        st.markdown("---")
-        st.markdown("### Production Sequence")
+        st.info(f"**Calculated Impressions:** {impressions:,} | **Packets:** {packets:,}")
         
-        available_processes = sorted(list(MACHINE_DATA.keys()))
+        st.subheader("Production Sequence")
+        st.markdown("Select processes in order (Print → Fold/Cut → Trim → Bind):")
+        
         selected_processes = []
-        
         cols = st.columns(3)
-        for idx, process in enumerate(available_processes):
+        for idx, machine in enumerate(sorted(MACHINE_DATA.keys())):
             col = cols[idx % 3]
-            if col.checkbox(process):
-                selected_processes.append(process)
+            if col.checkbox(machine):
+                selected_processes.append(machine)
         
-        submitted = st.form_submit_button("Create Job & Schedule", use_container_width=True)
+        submitted = st.form_submit_button("✅ Create Job & Schedule", use_container_width=True)
         
         if submitted:
             if not job_name or not sales_rep or not selected_processes:
-                st.error("Please fill in all fields and select at least one process")
+                st.error("❌ Please fill all fields and select at least one process.")
             else:
-                target_dt = None
-                if target_deadline:
-                    target_dt = datetime.combine(target_deadline, datetime.min.time())
+                target_dt = datetime.combine(target_deadline, datetime.min.time()) if target_deadline else None
                 
-                job = add_job(job_name, sales_rep, impressions, selected_processes, contract_value, target_dt, finished_qty, ups, st.session_state.get('sheets_per_packet', 100), overs_pct)
-                st.success(f"Job '{job_name}' created!")
-                
-                # Display schedule
-                st.markdown("### Job Schedule")
-                schedule_data = []
-                for idx, task in enumerate(job['schedule']):
-                    schedule_data.append({
-                        'Step': idx + 1,
-                        'Process': task['process'],
-                        'Start': task['start'].strftime('%Y-%m-%d %H:%M'),
-                        'Finish': task['end'].strftime('%Y-%m-%d %H:%M'),
-                        'Duration (hours)': f"{task['duration']:.2f}"
-                    })
-                
-                st.dataframe(pd.DataFrame(schedule_data), use_container_width=True, hide_index=True)
-                
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    total_time = sum(t['duration'] for t in job['schedule'])
-                    st.metric("Total Time", f"{total_time:.2f}h")
-                with col2:
-                    st.metric("Calculated Finish", job['calculated_finish'].strftime('%m/%d %H:%M'))
-                with col3:
-                    st.metric("Contract Value", f"${job['contract_value']:,.0f}")
-                with col4:
-                    status = "✅ On-Time" if job['on_time'] else "❌ Late"
-                    st.metric("Deadline Status", status)
+                if add_job(job_name, sales_rep, impressions, selected_processes, contract_value, target_dt):
+                    st.success(f"✅ Job '{job_name}' created successfully!")
+                    
+                    # Display schedule
+                    job = st.session_state.jobs[-1]
+                    st.subheader("Job Schedule")
+                    
+                    schedule_data = []
+                    for idx, task in enumerate(job['schedule']):
+                        schedule_data.append({
+                            'Stage': idx + 1,
+                            'Process': task['process'],
+                            'Start': task['start'].strftime('%Y-%m-%d %H:%M'),
+                            'End': task['end'].strftime('%Y-%m-%d %H:%M'),
+                            'Duration (hrs)': f"{task['duration']:.2f}"
+                        })
+                    
+                    st.dataframe(pd.DataFrame(schedule_data), use_container_width=True, hide_index=True)
+                    
+                    total_time = job['schedule'][-1]['end'] - job['schedule'][0]['start']
+                    total_hours = total_time.total_seconds() / 3600
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Duration", f"{total_hours:.1f} hours")
+                    with col2:
+                        st.metric("Expected Finish", job['schedule'][-1]['end'].strftime('%m/%d %H:%M'))
+                    with col3:
+                        st.metric(f"Revenue ({CURRENCY})", f"{contract_value:,.0f}")
+                else:
+                    st.error("❌ Failed to save job to database.")
 
-# PAGE 3: GANTT VIEW
-elif page == "Gantt View":
-    st.title("Gantt Chart - Job Visualization")
-    st.markdown("Interactive timeline of job flow through machines")
+# ==================== TAB 3: GANTT VIEW ====================
+with tab3:
+    st.header("Sequential Job Flow - Gantt Chart")
     
-    if not st.session_state.jobs:
-        st.warning("No jobs created yet. Go to 'Plan Job' to create a job.")
+    filtered_jobs = [j for j in st.session_state.jobs if selected_rep == "All" or j['sales_rep'] == selected_rep]
+    
+    if not filtered_jobs:
+        st.info("No jobs to visualize. Create a job first.")
     else:
-        jobs_to_display = st.session_state.jobs
-        if selected_rep != "All":
-            jobs_to_display = [job for job in st.session_state.jobs if job['sales_rep'] == selected_rep]
+        job_names = [j['name'] for j in filtered_jobs]
+        selected_job_name = st.selectbox("Select Job", job_names)
         
-        if not jobs_to_display:
-            st.info(f"No jobs for {selected_rep}")
-        else:
-            job_names = [job['name'] for job in jobs_to_display]
-            selected_job_name = st.selectbox("Select Job", job_names)
+        selected_job = next((j for j in filtered_jobs if j['name'] == selected_job_name), None)
+        
+        if selected_job:
+            st.subheader(f"Job Flow: {selected_job['name']}")
             
-            selected_job = next((job for job in jobs_to_display if job['name'] == selected_job_name), None)
+            # Create Gantt chart
+            fig = go.Figure()
             
-            if selected_job:
-                # Gantt chart
-                fig = go.Figure()
-                
-                colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
-                
-                for idx, task in enumerate(selected_job['schedule']):
-                    color = colors[idx % len(colors)]
-                    fig.add_trace(go.Bar(
-                        x=[task['duration']],
-                        y=[task['process']],
-                        orientation='h',
-                        name=task['process'],
-                        marker=dict(color=color),
-                        base=task['start'],
-                        hovertemplate=f"<b>{task['process']}</b><br>Start: %{{base|%Y-%m-%d %H:%M}}<br>Duration: {task['duration']:.2f}h<extra></extra>"
-                    ))
-                
-                # Add target deadline line if present
-                if selected_job['target_deadline']:
-                    fig.add_vline(
-                        x=selected_job['target_deadline'],
-                        line_dash="dash",
-                        line_color="red",
-                        annotation_text="Target",
-                        annotation_position="top right"
-                    )
-                
-                fig.update_layout(
-                    title=f"{selected_job['name']} - Finish: {selected_job['calculated_finish'].strftime('%Y-%m-%d %H:%M')}",
-                    xaxis_title="Timeline",
-                    yaxis_title="Process",
-                    barmode='overlay',
-                    height=500,
-                    showlegend=False,
-                    hovermode='closest'
+            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+            
+            for idx, task in enumerate(selected_job['schedule']):
+                color = colors[idx % len(colors)]
+                fig.add_trace(go.Bar(
+                    x=[task['duration']],
+                    y=[task['process']],
+                    orientation='h',
+                    name=task['process'],
+                    marker=dict(color=color),
+                    base=task['start'],
+                    hovertemplate=f"<b>{task['process']}</b><br>Start: %{{x[0]|%Y-%m-%d %H:%M}}<br>End: %{{x[1]|%Y-%m-%d %H:%M}}<extra></extra>"
+                ))
+            
+            # Add target deadline if set
+            if selected_job['target_deadline']:
+                fig.add_vline(
+                    x=selected_job['target_deadline'],
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text="Target Deadline"
                 )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Job details
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Job Name", selected_job['name'][:20])
-                with col2:
-                    st.metric("Sales Rep", selected_job['sales_rep'])
-                with col3:
-                    st.metric("Impressions", f"{selected_job['impressions']:,.0f}")
-                with col4:
-                    st.metric("Revenue", f"${selected_job['contract_value']:,.0f}")
+            
+            fig.update_layout(
+                title=f"Sequential Flow: {selected_job['name']} ({selected_job['impressions']:,} impressions)",
+                xaxis_title="Timeline",
+                yaxis_title="Process",
+                height=500,
+                barmode='overlay',
+                showlegend=False
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Schedule details
+            st.subheader("Schedule Details")
+            schedule_df = pd.DataFrame([
+                {
+                    'Process': t['process'],
+                    'Start': t['start'].strftime('%Y-%m-%d %H:%M'),
+                    'End': t['end'].strftime('%Y-%m-%d %H:%M'),
+                    'Duration (hrs)': f"{t['duration']:.2f}"
+                }
+                for t in selected_job['schedule']
+            ])
+            
+            st.dataframe(schedule_df, use_container_width=True, hide_index=True)
+            
+            # Summary metrics
+            total_duration = selected_job['schedule'][-1]['end'] - selected_job['schedule'][0]['start']
+            total_hours = total_duration.total_seconds() / 3600
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Duration", f"{total_hours:.1f}h")
+            with col2:
+                st.metric("Stages", len(selected_job['schedule']))
+            with col3:
+                st.metric("Expected Finish", selected_job['schedule'][-1]['end'].strftime('%m/%d %H:%M'))
+            with col4:
+                if selected_job['target_deadline']:
+                    status = "✅ On-Time" if selected_job['schedule'][-1]['end'] <= selected_job['target_deadline'] else "❌ Late"
+                    st.metric("Deadline Status", status)
