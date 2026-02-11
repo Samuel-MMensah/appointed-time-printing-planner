@@ -3,6 +3,19 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import math
+import os
+from supabase import create_client, Client
+
+# Initialize Supabase client
+SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
+supabase_client: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        st.warning(f"Supabase connection issue: {e}. Using session state only.")
 
 # Page configuration
 st.set_page_config(
@@ -40,6 +53,31 @@ if 'monthly_budget' not in st.session_state:
     st.session_state.monthly_budget = 150000
 if 'machine_load' not in st.session_state:
     st.session_state.machine_load = {machine: [] for machine in MACHINE_DATA.keys()}
+if 'supabase_loaded' not in st.session_state:
+    st.session_state.supabase_loaded = False
+
+# Load jobs from Supabase on first run
+if supabase_client and not st.session_state.supabase_loaded:
+    try:
+        jobs_from_db = load_jobs_from_supabase()
+        st.session_state.jobs = jobs_from_db
+        
+        # Rebuild machine load from loaded jobs
+        for job in st.session_state.jobs:
+            for task in job['schedule']:
+                process = task['process']
+                st.session_state.machine_load[process].append({
+                    'job': job['name'],
+                    'impressions': job['impressions'],
+                    'start': task['start'],
+                    'end': task['end'],
+                    'duration': task['duration']
+                })
+        
+        st.session_state.supabase_loaded = True
+    except Exception as e:
+        st.warning(f"Could not load from Supabase: {e}")
+        st.session_state.supabase_loaded = True
 
 # Helper functions
 def calculate_impressions(finished_qty, ups, overs_pct):
@@ -83,8 +121,98 @@ def calculate_job_schedule(job_name, impressions, processes, start_time=None):
     
     return schedule
 
-def add_job(job_name, sales_rep, impressions, processes, contract_value, target_deadline=None):
-    """Add a new job to the system"""
+def save_job_to_supabase(job_name, sales_rep, impressions, finished_qty, ups_per_sheet, sheets_per_packet, overs_pct, processes, contract_value, target_deadline, schedule):
+    """Save job and its processes to Supabase"""
+    if not supabase_client:
+        return None
+    
+    try:
+        # Insert job
+        job_data = {
+            'name': job_name,
+            'sales_rep': sales_rep,
+            'impressions': int(impressions),
+            'finished_qty': finished_qty,
+            'ups_per_sheet': ups_per_sheet,
+            'sheets_per_packet': sheets_per_packet,
+            'overs_pct': float(overs_pct),
+            'contract_value': float(contract_value),
+            'target_deadline': target_deadline.isoformat() if target_deadline else None,
+            'created_at': datetime.now().isoformat()
+        }
+        
+        response = supabase_client.table('jobs').insert(job_data).execute()
+        job_id = response.data[0]['id'] if response.data else None
+        
+        if job_id:
+            # Insert job processes
+            for idx, process in enumerate(processes):
+                task = schedule[idx]
+                process_data = {
+                    'job_id': job_id,
+                    'process_name': process,
+                    'sequence_order': idx + 1,
+                    'start_time': task['start'].isoformat(),
+                    'end_time': task['end'].isoformat(),
+                    'duration_hours': float(task['duration'])
+                }
+                supabase_client.table('job_processes').insert(process_data).execute()
+        
+        return job_id
+    except Exception as e:
+        st.warning(f"Error saving to Supabase: {e}")
+        return None
+
+def load_jobs_from_supabase():
+    """Load all jobs from Supabase"""
+    if not supabase_client:
+        return []
+    
+    try:
+        response = supabase_client.table('jobs').select('*').execute()
+        jobs = []
+        
+        for job_record in response.data:
+            # Load processes for this job
+            processes_response = supabase_client.table('job_processes').select('*').eq('job_id', job_record['id']).execute()
+            
+            processes = [p['process_name'] for p in sorted(processes_response.data, key=lambda x: x['sequence_order'])]
+            
+            schedule = []
+            for p in sorted(processes_response.data, key=lambda x: x['sequence_order']):
+                schedule.append({
+                    'process': p['process_name'],
+                    'start': datetime.fromisoformat(p['start_time']),
+                    'end': datetime.fromisoformat(p['end_time']),
+                    'duration': p['duration_hours'],
+                    'impressions': job_record['impressions']
+                })
+            
+            calculated_finish = schedule[-1]['end'] if schedule else datetime.fromisoformat(job_record['created_at'])
+            target_deadline = datetime.fromisoformat(job_record['target_deadline']) if job_record['target_deadline'] else None
+            on_time = True if target_deadline is None else calculated_finish <= target_deadline
+            
+            job = {
+                'name': job_record['name'],
+                'sales_rep': job_record['sales_rep'],
+                'impressions': job_record['impressions'],
+                'processes': processes,
+                'contract_value': job_record['contract_value'],
+                'schedule': schedule,
+                'target_deadline': target_deadline,
+                'calculated_finish': calculated_finish,
+                'on_time': on_time,
+                'created_at': datetime.fromisoformat(job_record['created_at'])
+            }
+            jobs.append(job)
+        
+        return jobs
+    except Exception as e:
+        st.warning(f"Error loading jobs from Supabase: {e}")
+        return []
+
+def add_job(job_name, sales_rep, impressions, processes, contract_value, target_deadline=None, finished_qty=None, ups_per_sheet=None, sheets_per_packet=None, overs_pct=None):
+    """Add a new job to the system (both local and Supabase)"""
     schedule = calculate_job_schedule(job_name, impressions, processes)
     
     calculated_finish = schedule[-1]['end'] if schedule else datetime.now()
@@ -104,6 +232,13 @@ def add_job(job_name, sales_rep, impressions, processes, contract_value, target_
     }
     
     st.session_state.jobs.append(job)
+    
+    # Save to Supabase if available
+    if supabase_client:
+        save_job_to_supabase(
+            job_name, sales_rep, impressions, finished_qty or 0, ups_per_sheet or 0, sheets_per_packet or 0, overs_pct or 5.0,
+            processes, contract_value, target_deadline, schedule
+        )
     
     # Update machine load
     for task in schedule:
@@ -305,7 +440,7 @@ elif page == "Plan Job":
                 if target_deadline:
                     target_dt = datetime.combine(target_deadline, datetime.min.time())
                 
-                job = add_job(job_name, sales_rep, impressions, selected_processes, contract_value, target_dt)
+                job = add_job(job_name, sales_rep, impressions, selected_processes, contract_value, target_dt, finished_qty, ups, st.session_state.get('sheets_per_packet', 100), overs_pct)
                 st.success(f"Job '{job_name}' created!")
                 
                 # Display schedule
