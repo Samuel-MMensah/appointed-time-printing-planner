@@ -14,6 +14,7 @@ st.markdown("""
     [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: bold; }
     .stTabs [data-baseweb="tab"] { height: 50px; background-color: #f1f5f9; border-radius: 5px; }
     .stTabs [aria-selected="true"] { background-color: #1e3a8a !important; color: white !important; }
+    .status-card { background-color: white; padding: 15px; border-radius: 8px; border-left: 5px solid #1e3a8a; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -51,12 +52,42 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-if 'jobs' not in st.session_state:
-    st.session_state.jobs = pd.DataFrame()
-if 'db_synced' not in st.session_state:
-    st.session_state.db_synced = False
+# --- Database Helper Functions ---
 
-# --- Logic Functions ---
+def load_jobs_from_db():
+    """Loads all jobs from Supabase."""
+    if not supabase: return []
+    try:
+        res = supabase.table('jobs').select("*").execute()
+        return res.data
+    except Exception as e:
+        st.error(f"DB Load Error: {e}")
+        return []
+
+def delete_job(job_name):
+    """Deletes all machine steps associated with a specific job name."""
+    try:
+        supabase.table('jobs').delete().eq('job_name', job_name).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting job: {e}")
+        return False
+
+def update_job_value(job_name, new_value):
+    """Updates the contract value for an existing job."""
+    try:
+        res = supabase.table('jobs').select("id").eq('job_name', job_name).execute()
+        steps = res.data
+        if steps:
+            val_per_step = new_value / len(steps)
+            for step in steps:
+                supabase.table('jobs').update({"contract_value": val_per_step}).eq('id', step['id']).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error updating job: {e}")
+        return False
+
+# --- Shift & Simulation Logic ---
 
 def get_next_working_time(start_dt, night_shift):
     if night_shift: return start_dt
@@ -85,6 +116,7 @@ def calculate_finish_with_shifts(start_dt, total_hours, night_shift):
 def add_job(name, sales_rep, finished_qty, ups, impressions, processes, total_value, night_shift=False):
     current_time = datetime.now().replace(hour=8, minute=0, second=0)
     rev_per_step = total_value / len(processes) if processes else 0
+    
     for proc in processes:
         if not st.session_state.jobs.empty:
             m_jobs = st.session_state.jobs[st.session_state.jobs['machine'] == proc]
@@ -108,12 +140,18 @@ def add_job(name, sales_rep, finished_qty, ups, impressions, processes, total_va
         current_time = finish_time 
     return True
 
+# --- State Management ---
+if 'jobs' not in st.session_state:
+    st.session_state.jobs = pd.DataFrame()
+if 'db_synced' not in st.session_state:
+    st.session_state.db_synced = False
+
 if not st.session_state.db_synced:
-    data = load_jobs_from_db() if supabase else []
+    data = load_jobs_from_db()
     st.session_state.jobs = pd.DataFrame(data)
     st.session_state.db_synced = True
 
-# --- UI ---
+# --- UI Layout ---
 st.title("🏭 Appointed Time Printing - Elite Planner")
 
 t1, t2, t3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📋 Production Timeline"])
@@ -125,21 +163,35 @@ with t1:
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Projected Revenue", f"{CURRENCY}{df['contract_value'].sum():,.2f}")
-        c2.metric("Total Job Steps", len(df))
-        c3.metric("Active Machines", df['machine'].nunique())
+        c2.metric("Total Steps", len(df))
+        c3.metric("Machine Utilization", f"{df['machine'].nunique()} Active")
 
-        st.subheader("Machine Availability Status")
-        # Capacity indicator for sales
-        cols = st.columns(4)
-        for i, (m_name, m_data) in enumerate(list(MACHINE_DATA.items())[:4]):
-            m_jobs = df[df['machine'] == m_name]
-            status = "🔴 Busy" if not m_jobs.empty else "🟢 Available"
-            cols[i%4].info(f"**{m_name}**\n\n{status}")
+        st.divider()
+        st.subheader("🛠️ Manage Existing Jobs")
+        unique_jobs = df['job_name'].unique()
+        selected_job = st.selectbox("Select a job to Edit or Delete", unique_jobs)
+        
+        col_edit, col_del = st.columns(2)
+        with col_edit:
+            with st.expander(f"Edit Value for {selected_job}"):
+                cur_val = df[df['job_name'] == selected_job]['contract_value'].sum()
+                new_val = st.number_input("Update Total Contract Value", value=float(cur_val))
+                if st.button("Save Changes"):
+                    if update_job_value(selected_job, new_val):
+                        st.success("Updated!")
+                        st.session_state.db_synced = False
+                        st.rerun()
+        with col_del:
+            with st.expander(f"⚠️ Delete {selected_job}"):
+                if st.button(f"Confirm Delete {selected_job}", type="primary"):
+                    if delete_job(selected_job):
+                        st.session_state.db_synced = False
+                        st.rerun()
     else:
-        st.info("No jobs scheduled.")
+        st.info("Floor is clear. Start by planning a job.")
 
 with t2:
-    st.header("New Job Entry")
+    st.header("New Job Entry Simulation")
     with st.form("job_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         name = col1.text_input("Job Name")
@@ -148,24 +200,26 @@ with t2:
         q, u, v = st.columns(3)
         qty = q.number_input("Finished Quantity", value=10000)
         ups = u.number_input("Ups", value=1)
-        val = v.number_input("Total Value", value=1000.0)
+        val = v.number_input("Total Contract Value", value=1000.0)
         
-        procs = st.multiselect("Workflow", list(MACHINE_DATA.keys()))
-        night = st.toggle("🌙 Continuous Night Shift")
+        procs = st.multiselect("Workflow Steps", list(MACHINE_DATA.keys()))
+        night = st.toggle("🌙 Continuous Night Shift (24h)")
         
-        if st.form_submit_button("Schedule Job"):
-            if add_job(name, rep, qty, ups, math.ceil(qty/ups), procs, val, night):
-                st.session_state.db_synced = False
-                st.rerun()
+        if st.form_submit_button("Confirm & Schedule Job"):
+            if name and procs:
+                if add_job(name, rep, qty, ups, math.ceil(qty/ups), procs, val, night):
+                    st.session_state.db_synced = False
+                    st.rerun()
+            else:
+                st.error("Missing Job Name or Production Steps")
 
 with t3:
-    st.header("📋 Production Timeline Simulation")
+    st.header("📋 Interactive Production Simulation")
     if not st.session_state.jobs.empty:
         df_viz = st.session_state.jobs.copy()
         df_viz['start_time'] = pd.to_datetime(df_viz['start_time'])
         df_viz['finish_time'] = pd.to_datetime(df_viz['finish_time'])
 
-        # FIXED ARGS: x_start and x_end
         fig = px.timeline(
             df_viz, 
             x_start="start_time", 
@@ -177,70 +231,17 @@ with t3:
             template="plotly_white"
         )
         fig.update_yaxes(autorange="reversed")
-        fig.update_layout(height=500, xaxis_title="Timeline (Pauses at 5pm daily)")
+        fig.update_layout(height=600, xaxis_title="Simulation Timeline (Paused 5 PM - 8 AM)")
         st.plotly_chart(fig, use_container_width=True)
         
-        # Clean List View
-        for date, group in df_viz.sort_values('finish_time').groupby(df_viz['finish_time'].dt.date):
-            st.subheader(f"🗓️ {date.strftime('%A, %b %d')}")
-            for _, job in group.iterrows():
-                st.success(f"**{job['job_name']}** - Ready at {pd.to_datetime(job['finish_time']).strftime('%I:%M %p')} (Machine: {job['machine']})")
-# --- Additional CRUD Logic ---
-
-def delete_job(job_name):
-    """Deletes all machine steps associated with a specific job name."""
-    try:
-        supabase.table('jobs').delete().eq('job_name', job_name).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error deleting job: {e}")
-        return False
-
-def update_job_value(job_name, new_value):
-    """Updates the contract value for an existing job."""
-    try:
-        # Fetch steps to redistribute value
-        res = supabase.table('jobs').select("id").eq('job_name', job_name).execute()
-        steps = res.data
-        if steps:
-            val_per_step = new_value / len(steps)
-            for step in steps:
-                supabase.table('jobs').update({"contract_value": val_per_step}).eq('id', step['id']).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error updating job: {e}")
-        return False
-
-# --- UI Update for Dashboard (Tab 1) ---
-
-with t1:
-    if not st.session_state.jobs.empty:
-        # ... (Existing metric code here) ...
-
         st.divider()
-        st.subheader("🛠️ Manage Existing Jobs")
-        
-        # Get unique job names for selection
-        unique_jobs = st.session_state.jobs['job_name'].unique()
-        selected_job = st.selectbox("Select a job to Edit or Delete", unique_jobs)
-        
-        col_edit, col_del = st.columns(2)
-        
-        with col_edit:
-            with st.expander(f"Edit {selected_job}"):
-                current_val = st.session_state.jobs[st.session_state.jobs['job_name'] == selected_job]['contract_value'].sum()
-                new_val = st.number_input("Update Total Contract Value", value=float(current_val))
-                if st.button("Save Changes"):
-                    if update_job_value(selected_job, new_val):
-                        st.success(f"Updated {selected_job} value to {CURRENCY}{new_val:,.2f}")
-                        st.session_state.db_synced = False
-                        st.rerun()
-        
-        with col_del:
-            with st.expander(f"⚠️ Delete {selected_job}"):
-                st.warning("This will remove all production stages for this job.")
-                if st.button(f"Confirm Delete {selected_job}", type="primary"):
-                    if delete_job(selected_job):
-                        st.success(f"Job '{selected_job}' deleted.")
-                        st.session_state.db_synced = False
-                        st.rerun()
+        st.subheader("Collection Schedule")
+        for date, group in df_viz.sort_values('finish_time').groupby(df_viz['finish_time'].dt.date):
+            st.write(f"#### 🗓️ {date.strftime('%A, %b %d')}")
+            for _, job in group.iterrows():
+                st.markdown(f"""
+                <div class="status-card">
+                    <b>{job['job_name']}</b> | Rep: {job['sales_rep']} <br>
+                    <small>Step: {job['machine']} — <b>Ready: {pd.to_datetime(job['finish_time']).strftime('%I:%M %p')}</b></small>
+                </div>
+                """, unsafe_allow_html=True)
