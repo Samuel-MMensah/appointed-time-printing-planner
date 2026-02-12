@@ -184,97 +184,100 @@ with t2:
                     st.rerun()
 
 with t3:
-    st.header("Production Visualizer")
+    st.header("🏢 Enterprise Production Control")
     if not st.session_state.jobs.empty:
         df_viz = st.session_state.jobs.copy()
         df_viz['start_time'] = pd.to_datetime(df_viz['start_time'])
         df_viz['finish_time'] = pd.to_datetime(df_viz['finish_time'])
 
-        # --- NEW: Time Scale Selection (Matching Reference Images) ---
-        # Reference images show "Monthly", "Weekly", "Daily" toggles
-        view_col1, view_col2 = st.columns([2, 8])
-        time_scale = view_col1.radio("View Scale", ["Monthly", "Weekly", "Daily"], index=1, horizontal=True)
+        # Create a cleaner status for the visualizer
+        now = datetime.now()
+        def get_status(row):
+            if row['finish_time'] < now: return "✅ Completed"
+            if row['start_time'] <= now <= row['finish_time']: return "⚙️ In Progress"
+            return "⏳ Scheduled"
         
-        # Configure X-axis tick formats based on selection to match the "months, days" requirement
-        if time_scale == "Monthly":
-            dt_format = "%b %Y"
-            tick_vals = "M1"
-        elif time_scale == "Weekly":
-            dt_format = "Week %W, %b %d"
-            tick_vals = "604800000" # 7 days in ms
-        else: # Daily
-            dt_format = "%a, %b %d"
-            tick_vals = "86400000" # 1 day in ms
+        df_viz['Status'] = df_viz.apply(get_status, axis=1)
 
-        # Enhanced Plotly Gantt
+        # Professional Gantt with Dual-Axis Timeline
         fig = px.timeline(
             df_viz, 
             x_start="start_time", 
             x_end="finish_time", 
             y="machine", 
             color="job_name",
-            text="job_name", 
-            opacity=0.85, 
-            color_discrete_sequence=px.colors.qualitative.Prism,
-            template="plotly_white", 
-            hover_data=["sales_rep", "quantity"]
+            text="job_name",
+            hover_data={
+                "job_name": True,
+                "sales_rep": True,
+                "Status": True,
+                "start_time": "|%b %d, %H:%M",
+                "finish_time": "|%b %d, %H:%M"
+            },
+            color_discrete_sequence=px.colors.qualitative.Safe, # More professional palette
+            template="plotly_white"
         )
 
-        # Update axis to include Months and Days exactly like the requested visual
+        # Refined Layout for "Production Control" Look
+        fig.update_layout(
+            height=550,
+            showlegend=True,
+            legend_title_text="Active Projects",
+            margin=dict(l=10, r=10, t=80, b=40),
+            xaxis=dict(
+                side="top",
+                tickformat="%d\n%a", # Day number over Day name
+                dtick=86400000.0,    # One day intervals
+                gridcolor="#f1f5f9",
+                linecolor="#e2e8f0",
+                tickfont=dict(size=10, color="#64748b")
+            )
+        )
+
+        # Adding the Month/Week Headers (The "Refined" look)
         fig.update_xaxes(
-            dtick=tick_vals,
-            tickformat=dt_format,
-            type="date",
-            side="top", # Place dates at the top as seen in many production planners
-            gridcolor="#e2e8f0",
-            minor=dict(ticklen=6, tickmode="auto", showgrid=True)
+            rangeslider_visible=False,
+            minor=dict(tickformat="%b", dtick="M1", showgrid=True), # Month headers
         )
 
         fig.update_yaxes(
             autorange="reversed", 
-            title_text="", 
-            tickfont=dict(size=12, color="#1e3a8a", family="Arial Black"),
-            gridcolor="#e2e8f0"
+            title_text="",
+            gridcolor="#f1f5f9",
+            tickfont=dict(size=11, family="Inter, sans-serif", color="#1e293b")
         )
 
-        fig.update_layout(
-            height=600, 
-            xaxis_title=f"Simulation Timeline ({time_scale} View)", 
-            showlegend=True, # Sales teams often prefer a legend for color coding jobs
-            font=dict(family="Arial", size=11),
-            margin=dict(l=20, r=20, t=100, b=20) # Extra top margin for the date labels
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # --- Lead Time Calculation and Table ---
-        lead_time_data = df_viz.groupby('job_name').agg({
-            'start_time': 'min',
-            'finish_time': 'max'
-        }).reset_index()
-        lead_time_data['Days'] = (lead_time_data['finish_time'] - lead_time_data['start_time']).dt.total_seconds() / (24 * 3600)
-        lead_time_data['Estimated Days'] = lead_time_data['Days'].apply(lambda x: f"{math.ceil(x)} Day(s)")
+        # Add a "Today" indicator line
+        fig.add_vline(x=now.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#ef4444")
 
-        st.subheader("📅 Collection Schedule (Tabulated)")
-        final_steps = df_viz.sort_values('finish_time').groupby('job_name').tail(1)
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+        # --- Tabulated Production Schedule ---
+        st.markdown("### 📋 Detailed Dispatch Schedule")
         
-        table_df = pd.merge(
-            final_steps[['job_name', 'machine', 'sales_rep', 'finish_time']],
-            lead_time_data[['job_name', 'Estimated Days']],
+        # Calculate lead times
+        lead_times = df_viz.groupby('job_name').agg({'start_time': 'min', 'finish_time': 'max'}).reset_index()
+        lead_times['Duration'] = ((lead_times['finish_time'] - lead_times['start_time']).dt.total_seconds() / 3600 / 24).apply(lambda x: f"{math.ceil(x)}d")
+        
+        final_table = pd.merge(
+            df_viz.sort_values('finish_time').groupby('job_name').tail(1),
+            lead_times[['job_name', 'Duration']], 
             on='job_name'
         )
-        
-        table_df['Date'] = table_df['finish_time'].dt.strftime('%A, %b %d')
-        table_df['Time'] = table_df['finish_time'].dt.strftime('%I:%M %p')
-        table_df = table_df.sort_values('finish_time').rename(columns={
-            'job_name': 'Job Name', 
-            'machine': 'Final Machine Step', 
-            'sales_rep': 'Rep',
-            'Estimated Days': 'Total Lead Time'
-        })
+
+        # Formatting for the UI Table
+        display_df = final_table[['job_name', 'sales_rep', 'Status', 'finish_time', 'Duration']].copy()
+        display_df['Due Date'] = display_df['finish_time'].dt.strftime('%b %d, %Y')
+        display_df['Time'] = display_df['finish_time'].dt.strftime('%I:%M %p')
         
         st.dataframe(
-            table_df[['Date', 'Time', 'Job Name', 'Final Machine Step', 'Total Lead Time', 'Rep']],
+            display_df[['job_name', 'sales_rep', 'Status', 'Due Date', 'Time', 'Duration']],
+            column_config={
+                "job_name": "Project Name",
+                "sales_rep": "Executive",
+                "Status": st.column_config.TextColumn("Current Status"),
+                "Duration": "Lead Time"
+            },
             use_container_width=True,
             hide_index=True
         )
