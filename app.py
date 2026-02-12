@@ -1,16 +1,19 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import math
 from supabase import create_client, Client
 
 # Page configuration
-st.set_page_config(
-    page_title="Appointed Time Printing - Job Planning",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Appointed Time - Elite Planner", layout="wide")
+
+# Custom CSS for a better look
+st.markdown("""
+    <style>
+    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: bold; }
+    .status-card { background-color: #f8fafc; border-radius: 10px; padding: 20px; border: 1px solid #e2e8f0; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # Machine data
 MACHINE_DATA = {
@@ -31,205 +34,166 @@ MACHINE_DATA = {
     'FOLDER GLUER': {'rate': 12000},
 }
 
-SETUP_HOURS = 2.0 
-CURRENCY = "GH₵" 
+SETUP_HOURS = 2.0  
+CURRENCY = "GH₵"
 
 @st.cache_resource
 def init_supabase():
     try:
-        url = st.secrets.get("SUPABASE_URL")
-        key = st.secrets.get("SUPABASE_KEY")
-        if not url or not key:
-            st.warning("⚠️ Supabase credentials not found. Using session state only.")
-            return None
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
     except Exception as e:
-        st.warning(f"⚠️ Supabase connection issue: {e}")
+        st.error(f"Supabase connection issue: {e}")
         return None
 
 supabase: Client = init_supabase()
 
-# Initialize session state
+# Session State Handling
 if 'jobs' not in st.session_state:
-    st.session_state.jobs = []
-if 'sales_reps' not in st.session_state:
-    st.session_state.sales_reps = set()
-if 'monthly_budget' not in st.session_state:
-    st.session_state.monthly_budget = 100000
-if 'machine_load' not in st.session_state:
-    st.session_state.machine_load = {machine: [] for machine in MACHINE_DATA.keys()}
+    st.session_state.jobs = pd.DataFrame()
 if 'db_synced' not in st.session_state:
     st.session_state.db_synced = False
 
-# Helper functions
+# --- Helper Logic ---
+
+def format_human_time(dt_obj):
+    """Simplifies technical timestamps for non-technical users."""
+    now = datetime.now()
+    if dt_obj.date() == now.date():
+        return f"Today at {dt_obj.strftime('%I:%M %p')}"
+    elif dt_obj.date() == (now + timedelta(days=1)).date():
+        return f"Tomorrow at {dt_obj.strftime('%I:%M %p')}"
+    else:
+        return dt_obj.strftime('%a, %b %d at %I:%M %p')
+
 def calculate_impressions(finished_qty, ups, overs_pct):
     sheets = math.ceil(finished_qty / ups)
-    impressions = sheets * (1 + overs_pct / 100)
-    return int(impressions)
-
-def calculate_processing_time(machine, impressions):
-    rate = MACHINE_DATA[machine]['rate']
-    return SETUP_HOURS + (impressions / rate)
-
-def calculate_job_schedule(job_name, impressions, processes, start_time=None):
-    schedule = []
-    current_time = start_time or datetime.now().replace(minute=0, second=0, microsecond=0)
-    for process in processes:
-        duration = calculate_processing_time(process, impressions)
-        end_time = current_time + timedelta(hours=duration)
-        schedule.append({
-            'process': process, 'start': current_time, 'end': end_time,
-            'duration': duration, 'impressions': impressions,
-            'run_time': (impressions / MACHINE_DATA[process]['rate']),
-            'setup_time': SETUP_HOURS
-        })
-        current_time = end_time
-    return schedule
-
-def delete_job_from_db(job_name):
-    if not supabase: return False
-    try:
-        supabase.table('jobs').delete().eq('name', job_name).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error deleting: {e}")
-        return False
-
-def save_job_to_db(job_data):
-    if not supabase: return False
-    try:
-        supabase.table('jobs').insert(job_data).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error saving: {e}")
-        return False
+    return int(sheets * (1 + overs_pct / 100))
 
 def load_jobs_from_db():
     if not supabase: return []
     try:
-        response = supabase.table('jobs').select('*').execute()
-        jobs = []
-        for record in response.data:
-            schedule = []
-            if 'schedule' in record and record['schedule']:
-                for task in record['schedule']:
-                    schedule.append({
-                        'process': task['process'],
-                        'start': datetime.fromisoformat(task['start']),
-                        'end': datetime.fromisoformat(task['end']),
-                        'duration': task['duration'],
-                        'impressions': task['impressions'],
-                        'run_time': task.get('run_time', 0),
-                        'setup_time': task.get('setup_time', 0)
-                    })
-            jobs.append({
-                'id': record.get('id'), 'name': record['name'], 'sales_rep': record['sales_rep'],
-                'impressions': record['impressions'], 'processes': record.get('processes', []),
-                'contract_value': record.get('contract_value', 0), 'schedule': schedule,
-                'target_deadline': datetime.fromisoformat(record['target_deadline']) if record.get('target_deadline') else None,
-                'created_at': datetime.fromisoformat(record['created_at']),
-                'efficiency': sum(t.get('run_time', 0) for t in schedule) / sum(t['duration'] for t in schedule) * 100 if schedule else 0
-            })
-            st.session_state.sales_reps.add(record['sales_rep'])
-        return jobs
+        res = supabase.table('jobs').select("*").execute()
+        return res.data
     except Exception as e:
-        st.warning(f"Error loading: {e}")
         return []
 
-# Initial Load
-if not st.session_state.db_synced and supabase:
-    st.session_state.jobs = load_jobs_from_db()
+def add_job(name, sales_rep, finished_qty, ups, impressions, processes, total_value, night_shift=False):
+    current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+    rev_per_step = total_value / len(processes)
+    
+    for proc in processes:
+        # Machine Queuing
+        if not st.session_state.jobs.empty:
+            m_jobs = st.session_state.jobs[st.session_state.jobs['machine'] == proc]
+            if not m_jobs.empty:
+                last_f = pd.to_datetime(m_jobs['finish_time']).max().tz_localize(None)
+                if last_f > current_time:
+                    current_time = last_f
+
+        # Process logic
+        duration = SETUP_HOURS + (impressions / MACHINE_DATA[proc]['rate'])
+        if "DIE CUTTER" in proc: current_time += timedelta(hours=8)
+        if "FOLDER GLUER" in proc: current_time += timedelta(hours=2)
+
+        # Shift Logic (08:00 - 17:00)
+        if not night_shift:
+            if current_time.hour >= 17:
+                current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
+            elif current_time.hour < 8:
+                current_time = current_time.replace(hour=8, minute=0)
+            
+        finish_time = current_time + timedelta(hours=duration)
+        
+        # Split across days if needed
+        if not night_shift and (finish_time.hour >= 17 or finish_time.date() > current_time.date()):
+            overtime = (finish_time - current_time.replace(hour=17, minute=0)).total_seconds() / 3600
+            finish_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0) + timedelta(hours=max(0, overtime))
+
+        supabase.table('jobs').insert({
+            "job_name": name, "sales_rep": sales_rep, "quantity": finished_qty,
+            "ups": ups, "impressions": impressions, "contract_value": float(rev_per_step),
+            "machine": proc, "start_time": current_time.isoformat(),
+            "finish_time": finish_time.isoformat()
+        }).execute()
+        current_time = finish_time 
+    return True
+
+if not st.session_state.db_synced:
+    st.session_state.jobs = pd.DataFrame(load_jobs_from_db())
     st.session_state.db_synced = True
-    st.session_state.machine_load = {m: [] for m in MACHINE_DATA.keys()}
-    for job in st.session_state.jobs:
-        for task in job['schedule']:
-            st.session_state.machine_load[task['process']].append({'job': job['name'], 'duration': task['duration']})
 
-# Sidebar
-st.sidebar.markdown("### ⚙️ Configuration")
-sales_rep_list = sorted(list(st.session_state.sales_reps)) if st.session_state.sales_reps else []
-selected_rep = st.sidebar.selectbox("Filter by Sales Rep", ["All"] + sales_rep_list)
-st.session_state.monthly_budget = st.sidebar.number_input(f"Budget Target ({CURRENCY})", value=st.session_state.monthly_budget)
+# --- UI Layout ---
+st.title("🏭 Appointed Time Printing - Elite Planner")
 
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📈 Gantt View"])
+t1, t2, t3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📋 Production Control"])
 
-# --- TAB 1: DASHBOARD ---
-with tab1:
-    f_jobs = [j for j in st.session_state.jobs if selected_rep == "All" or j['sales_rep'] == selected_rep]
-    total_rev = sum(j['contract_value'] for j in f_jobs)
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Projected Revenue", f"{CURRENCY}{total_rev:,.0f}")
-    col2.metric("Budgeted Target", f"{CURRENCY}{st.session_state.monthly_budget:,.0f}")
-    col3.metric("Gap", f"{CURRENCY}{max(0, st.session_state.monthly_budget - total_rev):,.0f}")
+with t1:
+    if not st.session_state.jobs.empty:
+        df = st.session_state.jobs.copy()
+        df['finish_dt'] = pd.to_datetime(df['finish_time'])
+        total_rev = df['contract_value'].sum()
+        target = 150000.00
+        
+        # Dashboard Metrics (Stoplight System)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Projected Revenue", f"{CURRENCY}{total_rev:,.2f}", f"{(total_rev/target)*100:.1f}% of target")
+        m2.metric("Annual Target", f"{CURRENCY}{target:,.2f}")
+        gap_color = "normal" if total_rev >= target else "inverse"
+        m3.metric("Revenue Gap", f"{CURRENCY}{max(0, target-total_rev):,.2f}", delta_color=gap_color)
+        
+        st.divider()
+        st.subheader("Current Machine Load")
+        
+        # Clean Table for Non-Technical Users
+        display_df = df.sort_values('finish_dt', ascending=True).tail(10).copy()
+        display_df['Completion Status'] = display_df['finish_dt'].apply(format_human_time)
+        
+        st.table(display_df[['job_name', 'machine', 'Completion Status']])
+    else:
+        st.info("The production floor is currently clear. Add a job to get started!")
 
-    st.subheader("Machine Status")
-    stoplight = []
-    for m in sorted(MACHINE_DATA.keys()):
-        load = sum(task['duration'] for task in st.session_state.machine_load.get(m, []))
-        status = "🟢 Available" if load == 0 else "🔴 Heavy" if load > 5 else "🟡 Active"
-        stoplight.append({'Machine': m, 'Status': status, 'Load (hrs)': f"{load:.1f}"})
-    
-    st.dataframe(pd.DataFrame(stoplight), width="stretch", hide_index=True)
-
-    if f_jobs:
-        st.subheader("Production Summary")
-        summary = pd.DataFrame([{
-            'Job Name': j['name'], 'Sales Rep': j['sales_rep'], 
-            'Finish': j['schedule'][-1]['end'].strftime('%Y-%m-%d %H:%M'),
-            'Revenue': f"{j['contract_value']:,.0f}"
-        } for j in f_jobs])
-        st.dataframe(summary, width="stretch", hide_index=True)
-
-        with st.expander("⚙️ Management Actions"):
-            job_to_del = st.selectbox("Select job to remove", [j['name'] for j in f_jobs])
-            if st.button("🗑️ Delete Selected Job", type="primary"):
-                if delete_job_from_db(job_to_del):
-                    st.session_state.db_synced = False
-                    st.rerun()
-
-# --- TAB 2: PLAN JOB ---
-with tab2:
+with t2:
+    st.header("New Job Entry")
     with st.form("job_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        j_name = c1.text_input("Job Name")
-        s_rep = c2.selectbox("Sales Rep", ["John Smith", "Sarah Johnson", "Mike Davis", "Other"])
+        name = c1.text_input("Job Name (e.g., Nutrifoods)")
+        rep = c2.selectbox("Sales Rep", ["John Smith", "Sarah Johnson", "Mike Davis"])
         
-        c1, c2, c3 = st.columns(3)
-        f_qty = c1.number_input("Finished Qty", value=10000)
-        u_sheet = c2.number_input("Ups", value=1)
-        c_val = c3.number_input("Contract Value", value=500.0)
+        q, u, o = st.columns(3)
+        qty = q.number_input("Finished Quantity", value=100000)
+        ups = u.number_input("Ups per Sheet", value=12)
+        overs = o.slider("Overs % (Buffer)", 0, 10, 2)
         
-        selected_procs = [m for m in sorted(MACHINE_DATA.keys()) if st.checkbox(m)]
+        val = st.number_input("Total Contract Value", value=5000.0)
+        procs = st.multiselect("Production Steps", list(MACHINE_DATA.keys()))
+        night = st.toggle("🌙 Run Night Shift for this job")
         
-        if st.form_submit_button("✅ Create Job", width="stretch"):
-            if j_name and selected_procs:
-                imps = calculate_impressions(f_qty, u_sheet, 5.0)
-                sched = calculate_job_schedule(j_name, imps, selected_procs)
-                db_data = {
-                    'name': j_name, 'sales_rep': s_rep, 'impressions': imps,
-                    'contract_value': float(c_val), 'processes': selected_procs,
-                    'created_at': datetime.now().isoformat(),
-                    'schedule': [{'process': t['process'], 'start': t['start'].isoformat(), 'end': t['end'].isoformat(), 'duration': t['duration'], 'impressions': t['impressions'], 'run_time': t['run_time'], 'setup_time': t['setup_time']} for t in sched]
-                }
-                if save_job_to_db(db_data):
-                    st.session_state.db_synced = False
-                    st.rerun()
+        if st.form_submit_button("Confirm & Schedule Job"):
+            if add_job(name, rep, qty, ups, calculate_impressions(qty, ups, overs), procs, val, night):
+                st.success("Job added to production schedule!")
+                st.session_state.db_synced = False
+                st.rerun()
 
-# --- TAB 3: GANTT VIEW ---
-with tab3:
-    if f_jobs:
-        sel_j = st.selectbox("View Timeline for:", [j['name'] for j in f_jobs])
-        job = next(j for j in f_jobs if j['name'] == sel_j)
+with t3:
+    st.header("📋 Production Control")
+    if not st.session_state.jobs.empty:
+        df_control = st.session_state.jobs.copy()
+        df_control['finish_dt'] = pd.to_datetime(df_control['finish_time'])
         
-        fig = go.Figure()
-        for t in job['schedule']:
-            fig.add_trace(go.Bar(
-                x=[t['duration']], y=[t['process']], orientation='h',
-                base=t['start'], name=t['process'],
-                text=f"{t['duration']:.1f}h", textposition='inside'
-            ))
-        fig.update_layout(height=400, width=1000, title=f"Timeline: {sel_j}", xaxis_type='date')
-        st.plotly_chart(fig, width="stretch")
-    else:
-        st.info("No jobs to display.")
+        for date, group in df_control.sort_values('finish_dt').groupby(df_control['finish_dt'].dt.date):
+            st.subheader(f"🗓️ {date.strftime('%A, %b %d')}")
+            for _, job in group.iterrows():
+                # Visual block style
+                st.markdown(f"""
+                    <div style="background-color: white; padding: 15px; border-radius: 8px; border-left: 10px solid #22c55e; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="font-weight: bold; font-size: 1.1em;">{job['job_name']}</span>
+                            <span style="color: #64748b;">Ready: {format_human_time(job['finish_dt'])}</span>
+                        </div>
+                        <div style="margin-top: 5px; color: #475569;">
+                            <b>Step:</b> {job['machine']} | <b>Rep:</b> {job['sales_rep']}
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
