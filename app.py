@@ -201,17 +201,37 @@ with t3:
                           showlegend=False, font=dict(family="Arial", size=11))
         st.plotly_chart(fig, use_container_width=True)
         
+        # Calculate lead times per job
+        lead_time_data = df_viz.groupby('job_name').agg({
+            'start_time': 'min',
+            'finish_time': 'max'
+        }).reset_index()
+        lead_time_data['Days'] = (lead_time_data['finish_time'] - lead_time_data['start_time']).dt.total_seconds() / (24 * 3600)
+        lead_time_data['Estimated Days'] = lead_time_data['Days'].apply(lambda x: f"{math.ceil(x)} Day(s)")
+
         # Tabulated Collection Schedule
         st.subheader("📅 Collection Schedule (Tabulated)")
-        table_df = df_viz[['job_name', 'machine', 'sales_rep', 'finish_time']].copy()
+        
+        # Get the final step for each job to display in the schedule
+        final_steps = df_viz.sort_values('finish_time').groupby('job_name').tail(1)
+        
+        table_df = pd.merge(
+            final_steps[['job_name', 'machine', 'sales_rep', 'finish_time']],
+            lead_time_data[['job_name', 'Estimated Days']],
+            on='job_name'
+        )
+        
         table_df['Date'] = table_df['finish_time'].dt.strftime('%A, %b %d')
         table_df['Time'] = table_df['finish_time'].dt.strftime('%I:%M %p')
         table_df = table_df.sort_values('finish_time').rename(columns={
-            'job_name': 'Job Name', 'machine': 'Final Machine Step', 'sales_rep': 'Rep'
+            'job_name': 'Job Name', 
+            'machine': 'Final Machine Step', 
+            'sales_rep': 'Rep',
+            'Estimated Days': 'Total Lead Time'
         })
         
         st.dataframe(
-            table_df[['Date', 'Time', 'Job Name', 'Final Machine Step', 'Rep']],
+            table_df[['Date', 'Time', 'Job Name', 'Final Machine Step', 'Total Lead Time', 'Rep']],
             use_container_width=True,
             hide_index=True
         )
