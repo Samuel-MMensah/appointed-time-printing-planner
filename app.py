@@ -189,19 +189,65 @@ with t3:
         df_viz = st.session_state.jobs.copy()
         df_viz['start_time'] = pd.to_datetime(df_viz['start_time'])
         df_viz['finish_time'] = pd.to_datetime(df_viz['finish_time'])
+
+        # --- NEW: Time Scale Selection (Matching Reference Images) ---
+        # Reference images show "Monthly", "Weekly", "Daily" toggles
+        view_col1, view_col2 = st.columns([2, 8])
+        time_scale = view_col1.radio("View Scale", ["Monthly", "Weekly", "Daily"], index=1, horizontal=True)
         
+        # Configure X-axis tick formats based on selection to match the "months, days" requirement
+        if time_scale == "Monthly":
+            dt_format = "%b %Y"
+            tick_vals = "M1"
+        elif time_scale == "Weekly":
+            dt_format = "Week %W, %b %d"
+            tick_vals = "604800000" # 7 days in ms
+        else: # Daily
+            dt_format = "%a, %b %d"
+            tick_vals = "86400000" # 1 day in ms
+
         # Enhanced Plotly Gantt
         fig = px.timeline(
-            df_viz, x_start="start_time", x_end="finish_time", y="machine", color="job_name",
-            text="job_name", opacity=0.85, color_discrete_sequence=px.colors.qualitative.Prism,
-            template="plotly_white", hover_data=["sales_rep", "quantity"]
+            df_viz, 
+            x_start="start_time", 
+            x_end="finish_time", 
+            y="machine", 
+            color="job_name",
+            text="job_name", 
+            opacity=0.85, 
+            color_discrete_sequence=px.colors.qualitative.Prism,
+            template="plotly_white", 
+            hover_data=["sales_rep", "quantity"]
         )
-        fig.update_yaxes(autorange="reversed", title_text="", tickfont=dict(size=12, color="#1e3a8a", family="Arial Black"))
-        fig.update_layout(height=500, xaxis_title="Simulation Timeline (Working Hours: 8 AM - 5 PM)", 
-                          showlegend=False, font=dict(family="Arial", size=11))
+
+        # Update axis to include Months and Days exactly like the requested visual
+        fig.update_xaxes(
+            dtick=tick_vals,
+            tickformat=dt_format,
+            type="date",
+            side="top", # Place dates at the top as seen in many production planners
+            gridcolor="#e2e8f0",
+            minor=dict(ticklen=6, tickmode="auto", showgrid=True)
+        )
+
+        fig.update_yaxes(
+            autorange="reversed", 
+            title_text="", 
+            tickfont=dict(size=12, color="#1e3a8a", family="Arial Black"),
+            gridcolor="#e2e8f0"
+        )
+
+        fig.update_layout(
+            height=600, 
+            xaxis_title=f"Simulation Timeline ({time_scale} View)", 
+            showlegend=True, # Sales teams often prefer a legend for color coding jobs
+            font=dict(family="Arial", size=11),
+            margin=dict(l=20, r=20, t=100, b=20) # Extra top margin for the date labels
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
         
-        # Calculate lead times per job
+        # --- Lead Time Calculation and Table ---
         lead_time_data = df_viz.groupby('job_name').agg({
             'start_time': 'min',
             'finish_time': 'max'
@@ -209,10 +255,7 @@ with t3:
         lead_time_data['Days'] = (lead_time_data['finish_time'] - lead_time_data['start_time']).dt.total_seconds() / (24 * 3600)
         lead_time_data['Estimated Days'] = lead_time_data['Days'].apply(lambda x: f"{math.ceil(x)} Day(s)")
 
-        # Tabulated Collection Schedule
         st.subheader("📅 Collection Schedule (Tabulated)")
-        
-        # Get the final step for each job to display in the schedule
         final_steps = df_viz.sort_values('finish_time').groupby('job_name').tail(1)
         
         table_df = pd.merge(
