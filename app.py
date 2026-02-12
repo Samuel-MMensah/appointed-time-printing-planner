@@ -159,7 +159,7 @@ with t2:
     with st.form("job_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         name = c1.text_input("Job Name (e.g., Nutrifoods)")
-        rep = c2.selectbox("Sales Rep", ["John Smith", "Sarah Johnson", "Mike Davis"])
+        rep = c2.selectbox("Sales Rep", ["Mabel Ampofo", "Daphne Sarpong", "Reginald Aidam", "Elizabeth Akoto", "Charles Adoo", "Mohammed Seidu Bunyamin", "Christian Mante", "Bertha Tackie"])
         
         q, u, o = st.columns(3)
         qty = q.number_input("Finished Quantity", value=100000)
