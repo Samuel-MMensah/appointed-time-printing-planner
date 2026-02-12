@@ -183,25 +183,24 @@ with t2:
                 if add_job(name, rep, qty, ups, math.ceil(qty/ups), procs, val, night):
                     st.session_state.db_synced = False
                     st.rerun()
-
 with t3:
-    st.header("🏢 Enterprise Production Control")
+    st.markdown("### 📋 Production Control Center")
     if not st.session_state.jobs.empty:
         df_viz = st.session_state.jobs.copy()
         df_viz['start_time'] = pd.to_datetime(df_viz['start_time'])
         df_viz['finish_time'] = pd.to_datetime(df_viz['finish_time'])
 
-        # FIX: Make 'now' timezone-aware to match the database values
+        # Standardize 'now' to be timezone-aware to prevent comparison crashes
         now = datetime.now(timezone.utc)
         
         def get_status(row):
-            if row['finish_time'] < now: return "✅ Completed"
-            if row['start_time'] <= now <= row['finish_time']: return "⚙️ In Progress"
-            return "⏳ Scheduled"
+            if row['finish_time'] < now: return "Completed"
+            if row['start_time'] <= now <= row['finish_time']: return "In Production"
+            return "Pending"
         
         df_viz['Status'] = df_viz.apply(get_status, axis=1)
 
-        # Professional Gantt with Dual-Axis Timeline
+        # 1. Professional Timeline Visualizer
         fig = px.timeline(
             df_viz, 
             x_start="start_time", 
@@ -209,53 +208,72 @@ with t3:
             y="machine", 
             color="job_name",
             text="job_name",
-            hover_data={
-                "job_name": True,
-                "sales_rep": True,
-                "Status": True,
-                "start_time": "|%b %d, %H:%M",
-                "finish_time": "|%b %d, %H:%M"
-            },
+            hover_data={"Status": True, "sales_rep": True, "quantity": True},
             color_discrete_sequence=px.colors.qualitative.Prism,
             template="plotly_white"
         )
 
+        # Fixed Axis Formatting (Avoiding the minor tickformat error)
         fig.update_layout(
-            height=550,
-            showlegend=True,
-            legend_title_text="Active Jobs",
-            margin=dict(l=10, r=10, t=80, b=40),
+            height=450,
+            showlegend=False,
+            margin=dict(l=10, r=10, t=50, b=10),
             xaxis=dict(
                 side="top",
-                tickformat="%d\n%a", # Day number over Day name
-                dtick=86400000.0,    # One day intervals
+                tickformat="%d\n%b", # Day number over Month name
+                dtick=86400000.0,    # Explicit 24-hour intervals
                 gridcolor="#f1f5f9",
-                tickfont=dict(size=10, color="#64748b")
-            )
+                linecolor="#e2e8f0",
+                tickfont=dict(size=11, color="#64748b")
+            ),
+            yaxis=dict(autorange="reversed", title_text="", gridcolor="#f1f5f9")
         )
-
-        fig.update_xaxes(minor=dict(tickformat="%b", dtick="M1", showgrid=True))
-        fig.update_yaxes(autorange="reversed", title_text="", gridcolor="#f1f5f9")
+        
+        # Add the 'Now' indicator line
         fig.add_vline(x=now.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#ef4444")
 
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-        # --- Tabulated Summary ---
-        st.subheader("📋 Dispatch Summary")
-        lead_times = df_viz.groupby('job_name').agg({'start_time': 'min', 'finish_time': 'max'}).reset_index()
-        lead_times['Lead Time'] = ((lead_times['finish_time'] - lead_times['start_time']).dt.total_seconds() / 86400).apply(lambda x: f"{math.ceil(x)}d")
+        # 2. Card-Style Dispatch Schedule (Matching image_0d895a.png)
+        st.markdown("---")
+        st.subheader("📅 Dispatch Queue")
         
-        final_table = pd.merge(
-            df_viz.sort_values('finish_time').groupby('job_name').tail(1),
-            lead_times[['job_name', 'Lead Time']], on='job_name'
-        )
+        # Sort by completion time
+        dispatch_df = df_viz.sort_values('finish_time')
+        
+        for _, row in dispatch_df.iterrows():
+            # Determine border color based on status
+            status_color = "#10b981" if row['Status'] == "Completed" else "#3b82f6"
+            if row['Status'] == "Pending": status_color = "#f59e0b"
 
-        st.dataframe(
-            final_table[['job_name', 'sales_rep', 'Status', 'finish_time', 'Lead Time']],
-            column_config={
-                "job_name": "Job Name",
-                "finish_time": st.column_config.DatetimeColumn("Completion Date", format="D MMM, h:mm a"),
-                "Status": "Status"
-            },
-            use_container_width=True, hide_index=True
-        )
+            with st.container():
+                # Custom HTML/CSS for the "Elite" card look
+                st.markdown(f"""
+                <div style="border-left: 5px solid {status_color}; 
+                            background-color: white; 
+                            padding: 15px; 
+                            border-radius: 5px; 
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+                            margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div>
+                            <h4 style="margin: 0; color: #1e3a8a;">{row['job_name']}</h4>
+                            <p style="margin: 5px 0; color: #64748b; font-size: 0.9rem;">
+                                <b>Step:</b> {row['machine']} | <b>Rep:</b> {row['sales_rep']}
+                            </p>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="background: {status_color}22; color: {status_color}; 
+                                         padding: 4px 12px; border-radius: 12px; font-weight: bold; font-size: 0.8rem;">
+                                {row['Status'].upper()}
+                            </span>
+                            <p style="margin: 5px 0 0 0; font-size: 0.85rem; color: #1e3a8a;">
+                                <b>Ready:</b> {row['finish_time'].strftime('%a, %b %d at %I:%M %p')}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    else:
+        st.info("No active production jobs found. Start by planning a job in the 'Plan Job' tab.")
