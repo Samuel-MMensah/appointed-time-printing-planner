@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, timezone
 import math
 from supabase import create_client, Client
 import plotly.express as px
@@ -107,13 +107,14 @@ def calculate_finish_with_shifts(start_dt, total_hours, night_shift):
     return current_time
 
 def add_job(name, sales_rep, finished_qty, ups, impressions, processes, total_value, night_shift=False):
-    current_time = datetime.now().replace(hour=8, minute=0, second=0)
+    # Standardize current time to UTC for DB compatibility
+    current_time = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)
     rev_per_step = total_value / len(processes) if processes else 0
     for proc in processes:
         if not st.session_state.jobs.empty:
             m_jobs = st.session_state.jobs[st.session_state.jobs['machine'] == proc]
             if not m_jobs.empty:
-                last_f = pd.to_datetime(m_jobs['finish_time']).max().tz_localize(None)
+                last_f = pd.to_datetime(m_jobs['finish_time']).max()
                 if last_f > current_time: current_time = last_f
         duration = SETUP_HOURS + (impressions / MACHINE_DATA[proc]['rate'])
         if "DIE CUTTER" in proc: current_time += timedelta(hours=8)
@@ -137,7 +138,7 @@ if not st.session_state.db_synced:
 
 # --- UI ---
 st.markdown('<div class="main-header">🏭 Appointed Time Printing - Elite Planner</div>', unsafe_allow_html=True)
-t1, t2, t3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📋 Production Timeline"])
+t1, t2, t3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📋 Production Control"])
 
 with t1:
     if not st.session_state.jobs.empty:
@@ -190,8 +191,9 @@ with t3:
         df_viz['start_time'] = pd.to_datetime(df_viz['start_time'])
         df_viz['finish_time'] = pd.to_datetime(df_viz['finish_time'])
 
-        # Create a cleaner status for the visualizer
-        now = datetime.now()
+        # FIX: Make 'now' timezone-aware to match the database values
+        now = datetime.now(timezone.utc)
+        
         def get_status(row):
             if row['finish_time'] < now: return "✅ Completed"
             if row['start_time'] <= now <= row['finish_time']: return "⚙️ In Progress"
@@ -214,70 +216,46 @@ with t3:
                 "start_time": "|%b %d, %H:%M",
                 "finish_time": "|%b %d, %H:%M"
             },
-            color_discrete_sequence=px.colors.qualitative.Safe, # More professional palette
+            color_discrete_sequence=px.colors.qualitative.Prism,
             template="plotly_white"
         )
 
-        # Refined Layout for "Production Control" Look
         fig.update_layout(
             height=550,
             showlegend=True,
-            legend_title_text="Active Projects",
+            legend_title_text="Active Jobs",
             margin=dict(l=10, r=10, t=80, b=40),
             xaxis=dict(
                 side="top",
                 tickformat="%d\n%a", # Day number over Day name
                 dtick=86400000.0,    # One day intervals
                 gridcolor="#f1f5f9",
-                linecolor="#e2e8f0",
                 tickfont=dict(size=10, color="#64748b")
             )
         )
 
-        # Adding the Month/Week Headers (The "Refined" look)
-        fig.update_xaxes(
-            rangeslider_visible=False,
-            minor=dict(tickformat="%b", dtick="M1", showgrid=True), # Month headers
-        )
-
-        fig.update_yaxes(
-            autorange="reversed", 
-            title_text="",
-            gridcolor="#f1f5f9",
-            tickfont=dict(size=11, family="Inter, sans-serif", color="#1e293b")
-        )
-
-        # Add a "Today" indicator line
+        fig.update_xaxes(minor=dict(tickformat="%b", dtick="M1", showgrid=True))
+        fig.update_yaxes(autorange="reversed", title_text="", gridcolor="#f1f5f9")
         fig.add_vline(x=now.timestamp() * 1000, line_width=2, line_dash="dash", line_color="#ef4444")
 
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-        # --- Tabulated Production Schedule ---
-        st.markdown("### 📋 Detailed Dispatch Schedule")
-        
-        # Calculate lead times
+        # --- Tabulated Summary ---
+        st.subheader("📋 Dispatch Summary")
         lead_times = df_viz.groupby('job_name').agg({'start_time': 'min', 'finish_time': 'max'}).reset_index()
-        lead_times['Duration'] = ((lead_times['finish_time'] - lead_times['start_time']).dt.total_seconds() / 3600 / 24).apply(lambda x: f"{math.ceil(x)}d")
+        lead_times['Lead Time'] = ((lead_times['finish_time'] - lead_times['start_time']).dt.total_seconds() / 86400).apply(lambda x: f"{math.ceil(x)}d")
         
         final_table = pd.merge(
             df_viz.sort_values('finish_time').groupby('job_name').tail(1),
-            lead_times[['job_name', 'Duration']], 
-            on='job_name'
+            lead_times[['job_name', 'Lead Time']], on='job_name'
         )
 
-        # Formatting for the UI Table
-        display_df = final_table[['job_name', 'sales_rep', 'Status', 'finish_time', 'Duration']].copy()
-        display_df['Due Date'] = display_df['finish_time'].dt.strftime('%b %d, %Y')
-        display_df['Time'] = display_df['finish_time'].dt.strftime('%I:%M %p')
-        
         st.dataframe(
-            display_df[['job_name', 'sales_rep', 'Status', 'Due Date', 'Time', 'Duration']],
+            final_table[['job_name', 'sales_rep', 'Status', 'finish_time', 'Lead Time']],
             column_config={
-                "job_name": "Project Name",
-                "sales_rep": "Executive",
-                "Status": st.column_config.TextColumn("Current Status"),
-                "Duration": "Lead Time"
+                "job_name": "Job Name",
+                "finish_time": st.column_config.DatetimeColumn("Completion Date", format="D MMM, h:mm a"),
+                "Status": "Status"
             },
-            use_container_width=True,
-            hide_index=True
+            use_container_width=True, hide_index=True
         )
