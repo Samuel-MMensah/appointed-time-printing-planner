@@ -1,19 +1,16 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import math
 from supabase import create_client, Client
 
 # Page configuration
-st.set_page_config(page_title="Appointed Time - Elite Planner", layout="wide")
-
-# Custom UI Styling
-st.markdown("""
-    <style>
-    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: bold; }
-    .status-card { background-color: #ffffff; border-radius: 10px; padding: 20px; border: 1px solid #e2e8f0; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(
+    page_title="Appointed Time Printing - Job Planning",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # Machine data
 MACHINE_DATA = {
@@ -34,176 +31,205 @@ MACHINE_DATA = {
     'FOLDER GLUER': {'rate': 12000},
 }
 
-SETUP_HOURS = 2.0  
-CURRENCY = "GH₵"
+SETUP_HOURS = 2.0 
+CURRENCY = "GH₵" 
 
 @st.cache_resource
 def init_supabase():
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        url = st.secrets.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY")
+        if not url or not key:
+            st.warning("⚠️ Supabase credentials not found. Using session state only.")
+            return None
         return create_client(url, key)
     except Exception as e:
-        st.error(f"Supabase connection issue: {e}")
+        st.warning(f"⚠️ Supabase connection issue: {e}")
         return None
 
 supabase: Client = init_supabase()
 
+# Initialize session state
 if 'jobs' not in st.session_state:
-    st.session_state.jobs = pd.DataFrame()
+    st.session_state.jobs = []
+if 'sales_reps' not in st.session_state:
+    st.session_state.sales_reps = set()
+if 'monthly_budget' not in st.session_state:
+    st.session_state.monthly_budget = 100000
+if 'machine_load' not in st.session_state:
+    st.session_state.machine_load = {machine: [] for machine in MACHINE_DATA.keys()}
 if 'db_synced' not in st.session_state:
     st.session_state.db_synced = False
 
-# --- Helper Logic ---
+# Helper functions
+def calculate_impressions(finished_qty, ups, overs_pct):
+    sheets = math.ceil(finished_qty / ups)
+    impressions = sheets * (1 + overs_pct / 100)
+    return int(impressions)
 
-def format_human_time(dt_obj):
-    """Simplifies timestamps for non-technical users."""
-    now = datetime.now()
-    if dt_obj.date() == now.date():
-        return f"Today at {dt_obj.strftime('%I:%M %p')}"
-    elif dt_obj.date() == (now + timedelta(days=1)).date():
-        return f"Tomorrow at {dt_obj.strftime('%I:%M %p')}"
-    else:
-        return dt_obj.strftime('%a, %b %d at %I:%M %p')
+def calculate_processing_time(machine, impressions):
+    rate = MACHINE_DATA[machine]['rate']
+    return SETUP_HOURS + (impressions / rate)
 
-def delete_job(job_name):
-    """CRUD: Delete job from database."""
+def calculate_job_schedule(job_name, impressions, processes, start_time=None):
+    schedule = []
+    current_time = start_time or datetime.now().replace(minute=0, second=0, microsecond=0)
+    for process in processes:
+        duration = calculate_processing_time(process, impressions)
+        end_time = current_time + timedelta(hours=duration)
+        schedule.append({
+            'process': process, 'start': current_time, 'end': end_time,
+            'duration': duration, 'impressions': impressions,
+            'run_time': (impressions / MACHINE_DATA[process]['rate']),
+            'setup_time': SETUP_HOURS
+        })
+        current_time = end_time
+    return schedule
+
+def delete_job_from_db(job_name):
+    if not supabase: return False
     try:
-        supabase.table('jobs').delete().eq('job_name', job_name).execute()
+        supabase.table('jobs').delete().eq('name', job_name).execute()
         return True
-    except:
+    except Exception as e:
+        st.error(f"Error deleting: {e}")
         return False
 
-def add_job(name, sales_rep, finished_qty, ups, impressions, processes, total_value, night_shift=False):
-    current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
-    rev_per_step = total_value / len(processes)
-    
-    for proc in processes:
-        # Machine Queuing Logic
-        if not st.session_state.jobs.empty:
-            m_jobs = st.session_state.jobs[st.session_state.jobs['machine'] == proc]
-            if not m_jobs.empty:
-                last_f = pd.to_datetime(m_jobs['finish_time']).max().tz_localize(None)
-                if last_f > current_time:
-                    current_time = last_f
+def save_job_to_db(job_data):
+    if not supabase: return False
+    try:
+        supabase.table('jobs').insert(job_data).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error saving: {e}")
+        return False
 
-        duration = SETUP_HOURS + (impressions / MACHINE_DATA[proc]['rate'])
-        
-        # Staging rules
-        if "DIE CUTTER" in proc: current_time += timedelta(hours=8)
-        if "FOLDER GLUER" in proc: current_time += timedelta(hours=2)
+def load_jobs_from_db():
+    if not supabase: return []
+    try:
+        response = supabase.table('jobs').select('*').execute()
+        jobs = []
+        for record in response.data:
+            schedule = []
+            if 'schedule' in record and record['schedule']:
+                for task in record['schedule']:
+                    schedule.append({
+                        'process': task['process'],
+                        'start': datetime.fromisoformat(task['start']),
+                        'end': datetime.fromisoformat(task['end']),
+                        'duration': task['duration'],
+                        'impressions': task['impressions'],
+                        'run_time': task.get('run_time', 0),
+                        'setup_time': task.get('setup_time', 0)
+                    })
+            jobs.append({
+                'id': record.get('id'), 'name': record['name'], 'sales_rep': record['sales_rep'],
+                'impressions': record['impressions'], 'processes': record.get('processes', []),
+                'contract_value': record.get('contract_value', 0), 'schedule': schedule,
+                'target_deadline': datetime.fromisoformat(record['target_deadline']) if record.get('target_deadline') else None,
+                'created_at': datetime.fromisoformat(record['created_at']),
+                'efficiency': sum(t.get('run_time', 0) for t in schedule) / sum(t['duration'] for t in schedule) * 100 if schedule else 0
+            })
+            st.session_state.sales_reps.add(record['sales_rep'])
+        return jobs
+    except Exception as e:
+        st.warning(f"Error loading: {e}")
+        return []
 
-        # Shift Logic (8am-5pm)
-        if not night_shift:
-            if current_time.hour >= 17:
-                current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
-            elif current_time.hour < 8:
-                current_time = current_time.replace(hour=8, minute=0)
-            
-        finish_time = current_time + timedelta(hours=duration)
-        
-        # Split work if it crosses closing time
-        if not night_shift and (finish_time.hour >= 17 or finish_time.date() > current_time.date()):
-            overtime = (finish_time - current_time.replace(hour=17, minute=0)).total_seconds() / 3600
-            finish_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0) + timedelta(hours=max(0, overtime))
-
-        supabase.table('jobs').insert({
-            "job_name": name, "sales_rep": sales_rep, "quantity": finished_qty,
-            "ups": ups, "impressions": impressions, "contract_value": float(rev_per_step),
-            "machine": proc, "start_time": current_time.isoformat(),
-            "finish_time": finish_time.isoformat()
-        }).execute()
-        current_time = finish_time 
-    return True
-
-# Sync data from Supabase
-if not st.session_state.db_synced:
-    res = supabase.table('jobs').select("*").execute()
-    st.session_state.jobs = pd.DataFrame(res.data)
+# Initial Load
+if not st.session_state.db_synced and supabase:
+    st.session_state.jobs = load_jobs_from_db()
     st.session_state.db_synced = True
+    st.session_state.machine_load = {m: [] for m in MACHINE_DATA.keys()}
+    for job in st.session_state.jobs:
+        for task in job['schedule']:
+            st.session_state.machine_load[task['process']].append({'job': job['name'], 'duration': task['duration']})
 
-# --- UI Layout ---
+# Sidebar
+st.sidebar.markdown("### ⚙️ Configuration")
+sales_rep_list = sorted(list(st.session_state.sales_reps)) if st.session_state.sales_reps else []
+selected_rep = st.sidebar.selectbox("Filter by Sales Rep", ["All"] + sales_rep_list)
+st.session_state.monthly_budget = st.sidebar.number_input(f"Budget Target ({CURRENCY})", value=st.session_state.monthly_budget)
 
-st.title("🏭 Appointed Time Printing - Elite Planner")
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📈 Gantt View"])
 
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📝 Plan Job", "📋 Production Control"])
-
+# --- TAB 1: DASHBOARD ---
 with tab1:
-    if not st.session_state.jobs.empty:
-        df = st.session_state.jobs.copy()
-        df['finish_dt'] = pd.to_datetime(df['finish_time'])
-        total_rev = df['contract_value'].sum()
-        target = 150000.00
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Revenue Achieved", f"{CURRENCY}{total_rev:,.2f}", f"{(total_rev/target)*100:.1f}%")
-        m2.metric("Annual Target", f"{CURRENCY}{target:,.2f}")
-        m3.metric("Gap", f"{CURRENCY}{max(0, target-total_rev):,.2f}", delta_color="inverse")
-        
-        st.divider()
-        
-        # Split view for better scannability
-        left_col, right_col = st.columns([2, 1])
-        
-        with left_col:
-            st.subheader("Current Job Queue")
-            df_display = df.sort_values('finish_dt').copy()
-            df_display['Ready For Next Step'] = df_display['finish_dt'].apply(format_human_time)
-            # UPDATED: width='stretch' replaces use_container_width
-            st.dataframe(df_display[['job_name', 'machine', 'Ready For Next Step']], width='stretch')
-            
-        with right_col:
-            st.subheader("🛠️ Management")
-            job_list = df['job_name'].unique()
-            job_to_manage = st.selectbox("Select Job", job_list)
-            
-            if st.button(f"🗑️ Delete Entire Job: {job_to_manage}", type="primary"):
-                if delete_job(job_to_manage):
-                    st.success(f"{job_to_manage} removed.")
+    f_jobs = [j for j in st.session_state.jobs if selected_rep == "All" or j['sales_rep'] == selected_rep]
+    total_rev = sum(j['contract_value'] for j in f_jobs)
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Projected Revenue", f"{CURRENCY}{total_rev:,.0f}")
+    col2.metric("Budgeted Target", f"{CURRENCY}{st.session_state.monthly_budget:,.0f}")
+    col3.metric("Gap", f"{CURRENCY}{max(0, st.session_state.monthly_budget - total_rev):,.0f}")
+
+    st.subheader("Machine Status")
+    stoplight = []
+    for m in sorted(MACHINE_DATA.keys()):
+        load = sum(task['duration'] for task in st.session_state.machine_load.get(m, []))
+        status = "🟢 Available" if load == 0 else "🔴 Heavy" if load > 5 else "🟡 Active"
+        stoplight.append({'Machine': m, 'Status': status, 'Load (hrs)': f"{load:.1f}"})
+    
+    st.dataframe(pd.DataFrame(stoplight), width="stretch", hide_index=True)
+
+    if f_jobs:
+        st.subheader("Production Summary")
+        summary = pd.DataFrame([{
+            'Job Name': j['name'], 'Sales Rep': j['sales_rep'], 
+            'Finish': j['schedule'][-1]['end'].strftime('%Y-%m-%d %H:%M'),
+            'Revenue': f"{j['contract_value']:,.0f}"
+        } for j in f_jobs])
+        st.dataframe(summary, width="stretch", hide_index=True)
+
+        with st.expander("⚙️ Management Actions"):
+            job_to_del = st.selectbox("Select job to remove", [j['name'] for j in f_jobs])
+            if st.button("🗑️ Delete Selected Job", type="primary"):
+                if delete_job_from_db(job_to_del):
                     st.session_state.db_synced = False
                     st.rerun()
-    else:
-        st.info("The production floor is clear. Use 'Plan Job' to start.")
 
+# --- TAB 2: PLAN JOB ---
 with tab2:
-    st.header("New Job Entry")
-    with st.form("job_form"):
+    with st.form("job_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        name = c1.text_input("Job Name")
-        rep = c2.selectbox("Sales Rep", ["John Smith", "Sarah Johnson", "Mike Davis"])
+        j_name = c1.text_input("Job Name")
+        s_rep = c2.selectbox("Sales Rep", ["John Smith", "Sarah Johnson", "Mike Davis", "Other"])
         
-        q, u, v = st.columns(3)
-        qty = q.number_input("Finished Qty", value=5000)
-        ups = u.number_input("Ups", value=1)
-        val = v.number_input("Total Contract Value", value=1000.0)
+        c1, c2, c3 = st.columns(3)
+        f_qty = c1.number_input("Finished Qty", value=10000)
+        u_sheet = c2.number_input("Ups", value=1)
+        c_val = c3.number_input("Contract Value", value=500.0)
         
-        procs = st.multiselect("Production Steps", list(MACHINE_DATA.keys()))
-        night = st.toggle("🌙 Enable Night Shift (Work past 5pm)")
+        selected_procs = [m for m in sorted(MACHINE_DATA.keys()) if st.checkbox(m)]
         
-        if st.form_submit_button("Confirm Schedule"):
-            if add_job(name, rep, qty, ups, qty/ups, procs, val, night):
-                st.session_state.db_synced = False
-                st.rerun()
+        if st.form_submit_button("✅ Create Job", width="stretch"):
+            if j_name and selected_procs:
+                imps = calculate_impressions(f_qty, u_sheet, 5.0)
+                sched = calculate_job_schedule(j_name, imps, selected_procs)
+                db_data = {
+                    'name': j_name, 'sales_rep': s_rep, 'impressions': imps,
+                    'contract_value': float(c_val), 'processes': selected_procs,
+                    'created_at': datetime.now().isoformat(),
+                    'schedule': [{'process': t['process'], 'start': t['start'].isoformat(), 'end': t['end'].isoformat(), 'duration': t['duration'], 'impressions': t['impressions'], 'run_time': t['run_time'], 'setup_time': t['setup_time']} for t in sched]
+                }
+                if save_job_to_db(db_data):
+                    st.session_state.db_synced = False
+                    st.rerun()
 
+# --- TAB 3: GANTT VIEW ---
 with tab3:
-    st.header("📋 Production Control")
-    if not st.session_state.jobs.empty:
-        df_c = st.session_state.jobs.copy()
-        df_c['finish_dt'] = pd.to_datetime(df_c['finish_time'])
+    if f_jobs:
+        sel_j = st.selectbox("View Timeline for:", [j['name'] for j in f_jobs])
+        job = next(j for j in f_jobs if j['name'] == sel_j)
         
-        for date, group in df_c.sort_values('finish_dt').groupby(df_c['finish_dt'].dt.date):
-            st.subheader(f"📅 {date.strftime('%A, %b %d')}")
-            for _, job in group.iterrows():
-                st.markdown(f"""
-                    <div style="background-color: white; padding: 12px; border-radius: 8px; border-left: 10px solid #22c55e; margin-bottom: 8px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <b>{job['job_name']}</b><br>
-                                <span style="font-size: 0.9em; color: #64748b;">Machine: {job['machine']}</span>
-                            </div>
-                            <div style="text-align: right;">
-                                <span style="color: #1e293b; font-weight: 500;">{format_human_time(job['finish_dt'])}</span>
-                            </div>
-                        </div>
-                    </div>
-                """, unsafe_allow_html=True)
+        fig = go.Figure()
+        for t in job['schedule']:
+            fig.add_trace(go.Bar(
+                x=[t['duration']], y=[t['process']], orientation='h',
+                base=t['start'], name=t['process'],
+                text=f"{t['duration']:.1f}h", textposition='inside'
+            ))
+        fig.update_layout(height=400, width=1000, title=f"Timeline: {sel_j}", xaxis_type='date')
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.info("No jobs to display.")
