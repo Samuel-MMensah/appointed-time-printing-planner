@@ -41,6 +41,33 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
+# --- TIME ENGINE: CALENDAR AWARENESS ---
+def is_working_time(dt, night_shift, weekend_work):
+    # Weekday check (0=Monday, 6=Sunday)
+    if not weekend_work and dt.weekday() >= 5:
+        return False
+    # Hours check (8am to 5pm)
+    if not night_shift:
+        if dt.hour < 8 or dt.hour >= 17:
+            return False
+    return True
+
+def calculate_production_end(start_time, duration_hours, night_shift, weekend_work):
+    current_time = start_time
+    remaining_hours = duration_hours
+    
+    # Step through time in 15-minute increments for precision
+    step_minutes = 15
+    while remaining_hours > 0:
+        if is_working_time(current_time, night_shift, weekend_work):
+            remaining_hours -= (step_minutes / 60)
+        current_time += timedelta(minutes=step_minutes)
+        
+        # Safety break for logic errors
+        if (current_time - start_time).days > 365: break 
+        
+    return current_time
+
 # --- BACKEND LOGIC ---
 def get_db_jobs():
     if not supabase: return pd.DataFrame()
@@ -53,28 +80,37 @@ def delete_job(job_name):
         return True
     except: return False
 
-def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift):
+def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work):
+    # Start simulation from "Now"
     now_base = datetime.now(timezone.utc).replace(microsecond=0)
     rev_per_step = total_value / len(processes) if processes else 0
     current_jobs = get_db_jobs()
     
+    # Track the finish time of the previous process to start the next one
+    job_sequence_start = now_base
+
     for proc in processes:
-        current_start = now_base
+        # Determine the earliest this machine is free
+        machine_free_at = now_base
         if not current_jobs.empty:
-            # FIX: Use ISO8601 format for robust parsing
             current_jobs['finish_time'] = pd.to_datetime(current_jobs['finish_time'], format='ISO8601', utc=True)
             m_jobs = current_jobs[current_jobs['machine'] == proc]
             if not m_jobs.empty:
-                current_start = max(now_base, m_jobs['finish_time'].max())
+                machine_free_at = max(now_base, m_jobs['finish_time'].max())
+
+        # Start process when BOTH machine is free AND previous stage is done
+        actual_start = max(machine_free_at, job_sequence_start)
+        
+        # Ensure start time is actually a working minute
+        while not is_working_time(actual_start, night_shift, weekend_work):
+            actual_start += timedelta(minutes=15)
 
         duration = SETUP_HOURS + (impressions / MACHINE_DATA[proc]['rate'])
+        actual_finish = calculate_production_end(actual_start, duration, night_shift, weekend_work)
         
-        actual_start = current_start 
-        if not night_shift and (actual_start.hour >= 17 or actual_start.hour < 8):
-             actual_start = (actual_start + timedelta(days=1)).replace(hour=8, minute=0)
-        
-        actual_finish = actual_start + timedelta(hours=duration)
-        
+        # Update sequence start for the NEXT process in this job
+        job_sequence_start = actual_finish
+
         supabase.table('jobs').insert({
             "job_name": name, "sales_rep": rep, "quantity": qty,
             "ups": ups, "impressions": impressions,
@@ -90,7 +126,6 @@ tab_dash, tab_plan, tab_control = st.tabs(["📊 Executive Dashboard", "📝 New
 with tab_dash:
     jobs_df = get_db_jobs()
     if not jobs_df.empty:
-        # FIX: Robust ISO parsing for the dashboard
         jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='ISO8601', utc=True)
         jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='ISO8601', utc=True)
         jobs_df['duration_hrs'] = (jobs_df['finish_time'] - jobs_df['start_time']).dt.total_seconds() / 3600
@@ -102,76 +137,60 @@ with tab_dash:
         
         st.divider()
         st.subheader("⚙️ Machine Load Factor")
-        
         load_df = jobs_df.groupby('machine')['duration_hrs'].sum().reset_index().sort_values('duration_hrs')
-        fig_load = px.bar(
-            load_df, x='duration_hrs', y='machine', orientation='h',
-            text='duration_hrs', color='duration_hrs', color_continuous_scale='Blues',
-            template="plotly_white", title="Total Hours Queued per Machine"
-        )
-        fig_load.update_traces(texttemplate='%{text:.1f} hrs', textposition='outside')
+        fig_load = px.bar(load_df, x='duration_hrs', y='machine', orientation='h', template="plotly_white", color='duration_hrs', color_continuous_scale='Blues')
         st.plotly_chart(fig_load, use_container_width=True)
 
         st.divider()
         st.subheader("📋 Active Project Overview")
-
         for job_name, group in jobs_df.groupby('job_name'):
             total_rev = group['contract_value'].sum()
             final_ready = group['finish_time'].max().strftime('%b %d, %I:%M %p')
             with st.expander(f"💼 {job_name.upper()} | Value: {CURRENCY}{total_rev:,.2f} | Final Ready: {final_ready}"):
-                detail_df = group[['machine', 'sales_rep', 'duration_hrs', 'finish_time']].copy()
-                detail_df['Allocated Time'] = detail_df['duration_hrs'].map('{:,.2f} Hours'.format)
+                detail_df = group[['machine', 'duration_hrs', 'finish_time']].copy()
                 detail_df['Completion'] = detail_df['finish_time'].dt.strftime('%b %d, %I:%M %p')
-                st.table(detail_df[['machine', 'sales_rep', 'Allocated Time', 'Completion']])
-                
+                st.table(detail_df[['machine', 'Completion']])
                 if st.button(f"Cancel Project: {job_name}", key=f"del_{job_name}"):
                     if delete_job(job_name): st.rerun()
-    else:
-        st.info("No active projects.")
+    else: st.info("No active projects.")
 
 # 2. Plan Job
 with tab_plan:
     with st.form("new_job"):
         c1, c2 = st.columns(2)
         name = c1.text_input("Job/Client Name")
-        rep = c2.selectbox("Sales Rep", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie"])
+        rep = c2.selectbox("Sales Rep", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
         q, u, v = st.columns(3)
         qty = q.number_input("Quantity", value=5000)
         ups_v = u.number_input("Ups", value=1)
         val = v.number_input("Total Value", value=1000.0)
         procs = st.multiselect("Machine Routing", list(MACHINE_DATA.keys()))
-        night = st.toggle("🌙 Enable 24-Hour Production")
+        
+        st.markdown("### 🕒 Shift Preferences")
+        col_a, col_b = st.columns(2)
+        night = col_a.toggle("🌙 Enable Night Shift (24hr)")
+        wknd = col_b.toggle("📅 Include Weekends")
+        
         if st.form_submit_button("Commit to Timeline"):
             if name and procs:
-                add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night)
+                add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night, wknd)
                 st.rerun()
 
 # 3. Production Control
 with tab_control:
     jobs_df = get_db_jobs()
     if not jobs_df.empty:
-        # FIX: Unified robust date parsing
         jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='ISO8601', utc=True)
         jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='ISO8601', utc=True)
-        
-        fig = px.timeline(
-            jobs_df, x_start="start_time", x_end="finish_time", y="machine",
-            color="job_name", text="job_name", template="plotly_white"
-        )
-        fig.update_traces(textposition="inside", insidetextanchor="middle")
-        fig.update_layout(height=400, showlegend=False, xaxis=dict(tickformat="%d %b\n%H:%M", dtick=3600000 * 12, title="", side="top"), yaxis=dict(title="", autorange="reversed"))
+        fig = px.timeline(jobs_df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
+        fig.update_layout(height=400, showlegend=False, xaxis=dict(title="", side="top"), yaxis=dict(title="", autorange="reversed"))
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("📅 Dispatch Schedule")
-        jobs_df['job_final_finish'] = jobs_df.groupby('job_name')['finish_time'].transform('max')
-        for job_name, stages in jobs_df.sort_values('job_final_finish').groupby('job_name', sort=False):
-            ready_t = stages['finish_time'].max().strftime('%A, %b %d at %I:%M %p')
-            with st.expander(f"📦 {job_name.upper()} — Final Completion: {ready_t}"):
-                stages['duration_hrs'] = (stages['finish_time'] - stages['start_time']).dt.total_seconds() / 3600
-                disp = stages[['machine', 'start_time', 'finish_time', 'duration_hrs']].copy()
+        for job_name, stages in jobs_df.groupby('job_name'):
+            with st.expander(f"📦 {job_name.upper()}"):
+                disp = stages[['machine', 'start_time', 'finish_time']].copy()
                 disp['Start'] = disp['start_time'].dt.strftime('%b %d, %I:%M %p')
                 disp['Ready'] = disp['finish_time'].dt.strftime('%b %d, %I:%M %p')
-                disp['Allocated Time'] = disp['duration_hrs'].map('{:,.2f} Hours'.format)
-                st.table(disp[['machine', 'Start', 'Ready', 'Allocated Time']])
-    else:
-        st.info("No active production.")
+                st.table(disp[['machine', 'Start', 'Ready']])
+    else: st.info("No active production.")
