@@ -5,21 +5,22 @@ import math
 from supabase import create_client, Client
 import plotly.express as px
 
-# --- PAGE CONFIGURATION ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Appointed Time - Elite Planner", layout="wide", page_icon="🏢")
 
-# Custom CSS for high-end ERP aesthetics
-st.markdown("""
+# --- 2. CUSTOM CSS & HEADER (The Fix for the raw text issue) ---
+style_and_header = """
     <style>
-    .main { background-color: #f8fafc; }
-    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 800; color: #1e3a8a; }
-    .stTabs [data-baseweb="tab"] { height: 50px; background-color: #ffffff; border-radius: 8px 8px 0 0; margin-right: 4px; border: 1px solid #e2e8f0; }
-    .stTabs [aria-selected="true"] { background-color: #1e3a8a !important; color: white !important; }
-    .header-style { font-size: 2.2rem; font-weight: 900; color: #1e3a8a; border-bottom: 3px solid #1e3a8a; margin-bottom: 20px; }
-    .status-open { color: #16a34a; font-weight: bold; }
-    .status-closed { color: #dc2626; font-weight: bold; }
+        .main { background-color: #f8fafc; }
+        [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 800; color: #1e3a8a; }
+        .stTabs [data-baseweb="tab"] { height: 50px; background-color: #ffffff; border-radius: 8px 8px 0 0; margin-right: 4px; border: 1px solid #e2e8f0; }
+        .stTabs [aria-selected="true"] { background-color: #1e3a8a !important; color: white !important; }
+        .header-style { font-size: 2.2rem; font-weight: 900; color: #1e3a8a; border-bottom: 3px solid #1e3a8a; margin-bottom: 20px; }
+        .status-open { color: #16a34a; font-weight: bold; text-align: right; }
+        .status-closed { color: #dc2626; font-weight: bold; text-align: right; }
     </style>
-    """, unsafe_allow_html=True)
+"""
+st.markdown(style_and_header, unsafe_allow_html=True)
 
 # Machine Rates & Global Setup
 MACHINE_DATA = {
@@ -43,31 +44,25 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-# --- TIME ENGINE: CALENDAR AWARENESS ---
+# --- 3. TIME ENGINE & LOGIC ---
 def is_working_time(dt, night_shift, weekend_work):
-    # Weekday check (0=Monday, 4=Friday, 5=Saturday, 6=Sunday)
-    if not weekend_work and dt.weekday() >= 5:
-        return False
-    # Standard Hours check (8am to 5pm)
+    if not weekend_work and dt.weekday() >= 5: return False
     if not night_shift:
-        if dt.hour < 8 or dt.hour >= 17:
-            return False
+        if dt.hour < 8 or dt.hour >= 17: return False
     return True
 
 def calculate_production_end(start_time, duration_hours, night_shift, weekend_work):
     current_time = start_time
     remaining_hours = duration_hours
     step_minutes = 15
-    
     while remaining_hours > 0:
         if is_working_time(current_time, night_shift, weekend_work):
             remaining_hours -= (step_minutes / 60)
         current_time += timedelta(minutes=step_minutes)
-        if (current_time - start_time).days > 365: break # Safety break
-        
+        if (current_time - start_time).days > 365: break 
     return current_time
 
-# --- DATABASE OPERATIONS ---
+# --- 4. DATABASE OPERATIONS ---
 def get_db_jobs():
     if not supabase: return pd.DataFrame()
     res = supabase.table('jobs').select("*").execute()
@@ -80,11 +75,9 @@ def delete_job(job_name):
     except: return False
 
 def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work, start_date):
-    # Convert chosen date to UTC datetime
     now_base = datetime.combine(start_date, datetime.now().time()).replace(tzinfo=timezone.utc, microsecond=0)
     rev_per_step = total_value / len(processes) if processes else 0
     current_jobs = get_db_jobs()
-    
     job_sequence_start = now_base
 
     for proc in processes:
@@ -96,14 +89,11 @@ def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, n
                 machine_free_at = max(now_base, m_jobs['finish_time'].max())
 
         actual_start = max(machine_free_at, job_sequence_start)
-        
-        # Advance to next available working window
         while not is_working_time(actual_start, night_shift, weekend_work):
             actual_start += timedelta(minutes=15)
 
         duration = SETUP_HOURS + (impressions / MACHINE_DATA[proc]['rate'])
         actual_finish = calculate_production_end(actual_start, duration, night_shift, weekend_work)
-        
         job_sequence_start = actual_finish
 
         supabase.table('jobs').insert({
@@ -113,18 +103,19 @@ def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, n
             "start_time": actual_start.isoformat(), "finish_time": actual_finish.isoformat()
         }).execute()
 
-# --- HEADER SECTION ---
+# --- 5. UI HEADER ---
 c_head, c_status = st.columns([3, 1])
 c_head.markdown('<div class="header-style">🏢 Appointed Time Production Intelligence</div>', unsafe_allow_html=True)
 
 now_gmt = datetime.now(timezone.utc)
 is_open = is_working_time(now_gmt, False, False)
-status_html = '<p class="status-open">● SHOP OPEN</p>' if is_open else '<p class="status-closed">○ SHOP CLOSED (Standard Hours)</p>'
-c_status.markdown(f"<div style='text-align: right; padding-top: 25px;'>{status_html}</div>", unsafe_allow_html=True)
+status_label = '● SHOP OPEN' if is_open else '○ SHOP CLOSED (Standard Hours)'
+status_class = 'status-open' if is_open else 'status-closed'
+c_status.markdown(f"<div style='padding-top: 25px;' class='{status_class}'>{status_label}</div>", unsafe_allow_html=True)
 
 tab_dash, tab_plan, tab_control = st.tabs(["📊 Executive Dashboard", "📝 New Simulation", "📅 Production Control"])
 
-# --- 1. EXECUTIVE DASHBOARD ---
+# --- 6. TABS CONTENT ---
 with tab_dash:
     jobs_df = get_db_jobs()
     if not jobs_df.empty:
@@ -157,7 +148,6 @@ with tab_dash:
                     if delete_job(job_name): st.rerun()
     else: st.info("The production queue is currently empty.")
 
-# --- 2. PLAN NEW JOB ---
 with tab_plan:
     with st.form("new_job", clear_on_submit=True):
         st.subheader("📝 Simulation Parameters")
@@ -170,7 +160,6 @@ with tab_plan:
         ups_v = u.number_input("Ups per Sheet", min_value=1, value=1)
         val = v.number_input("Total Contract Value", min_value=0.0, value=1000.0)
         
-        # ADDED: Scheduled Start Date Picker
         st.markdown("---")
         c_date, c_procs = st.columns([1, 2])
         start_date = c_date.date_input("📅 Scheduled Start Date", value=datetime.now().date())
@@ -185,18 +174,17 @@ with tab_plan:
         if st.form_submit_button("Commit to Live Schedule"):
             if name and procs:
                 add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night, wknd, start_date)
-                st.success(f"Job '{name}' has been added to the queue starting {start_date}!")
+                st.success(f"Job '{name}' has been added to the queue!")
                 st.rerun()
             else: st.error("Please provide both a Client Name and at least one Machine Process.")
 
-# --- 3. PRODUCTION CONTROL ---
 with tab_control:
     jobs_df = get_db_jobs()
     if not jobs_df.empty:
         jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='ISO8601', utc=True)
         jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='ISO8601', utc=True)
         
-        st.subheader(" GANTT Chart View")
+        st.subheader("📊 GANTT Chart View")
         fig = px.timeline(jobs_df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
                           template="plotly_white", hover_data=["sales_rep"])
         fig.update_layout(height=450, showlegend=True, xaxis=dict(title="Production Timeline", side="top"), yaxis=dict(title="", autorange="reversed"))
