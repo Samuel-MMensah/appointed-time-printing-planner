@@ -79,8 +79,9 @@ def delete_job(job_name):
         return True
     except: return False
 
-def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work):
-    now_base = datetime.now(timezone.utc).replace(microsecond=0)
+def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work, start_date):
+    # Convert chosen date to UTC datetime
+    now_base = datetime.combine(start_date, datetime.now().time()).replace(tzinfo=timezone.utc, microsecond=0)
     rev_per_step = total_value / len(processes) if processes else 0
     current_jobs = get_db_jobs()
     
@@ -169,7 +170,11 @@ with tab_plan:
         ups_v = u.number_input("Ups per Sheet", min_value=1, value=1)
         val = v.number_input("Total Contract Value", min_value=0.0, value=1000.0)
         
-        procs = st.multiselect("Machine Routing (In Production Order)", list(MACHINE_DATA.keys()))
+        # ADDED: Scheduled Start Date Picker
+        st.markdown("---")
+        c_date, c_procs = st.columns([1, 2])
+        start_date = c_date.date_input("📅 Scheduled Start Date", value=datetime.now().date())
+        procs = c_procs.multiselect("Machine Routing (In Production Order)", list(MACHINE_DATA.keys()))
         
         st.markdown("---")
         st.subheader("🕒 Operational Overrides")
@@ -179,8 +184,8 @@ with tab_plan:
         
         if st.form_submit_button("Commit to Live Schedule"):
             if name and procs:
-                add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night, wknd)
-                st.success(f"Job '{name}' has been added to the queue!")
+                add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night, wknd, start_date)
+                st.success(f"Job '{name}' has been added to the queue starting {start_date}!")
                 st.rerun()
             else: st.error("Please provide both a Client Name and at least one Machine Process.")
 
