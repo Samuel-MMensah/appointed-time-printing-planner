@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, timezone, time
+from datetime import datetime, timedelta, timezone
 import math
 from supabase import create_client, Client
 import plotly.express as px
@@ -45,8 +45,10 @@ supabase: Client = init_supabase()
 
 # --- TIME ENGINE: CALENDAR AWARENESS ---
 def is_working_time(dt, night_shift, weekend_work):
+    # Weekday check (0=Monday, 4=Friday, 5=Saturday, 6=Sunday)
     if not weekend_work and dt.weekday() >= 5:
         return False
+    # Standard Hours check (8am to 5pm)
     if not night_shift:
         if dt.hour < 8 or dt.hour >= 17:
             return False
@@ -56,11 +58,13 @@ def calculate_production_end(start_time, duration_hours, night_shift, weekend_wo
     current_time = start_time
     remaining_hours = duration_hours
     step_minutes = 15
+    
     while remaining_hours > 0:
         if is_working_time(current_time, night_shift, weekend_work):
             remaining_hours -= (step_minutes / 60)
         current_time += timedelta(minutes=step_minutes)
-        if (current_time - start_time).days > 365: break 
+        if (current_time - start_time).days > 365: break # Safety break
+        
     return current_time
 
 # --- DATABASE OPERATIONS ---
@@ -75,9 +79,8 @@ def delete_job(job_name):
         return True
     except: return False
 
-def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work, custom_start_dt):
-    # Use selected future date OR current time
-    now_base = custom_start_dt if custom_start_dt else datetime.now(timezone.utc).replace(microsecond=0)
+def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work):
+    now_base = datetime.now(timezone.utc).replace(microsecond=0)
     rev_per_step = total_value / len(processes) if processes else 0
     current_jobs = get_db_jobs()
     
@@ -93,6 +96,7 @@ def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, n
 
         actual_start = max(machine_free_at, job_sequence_start)
         
+        # Advance to next available working window
         while not is_working_time(actual_start, night_shift, weekend_work):
             actual_start += timedelta(minutes=15)
 
@@ -126,18 +130,25 @@ with tab_dash:
         jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='ISO8601', utc=True)
         jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='ISO8601', utc=True)
         jobs_df['duration_hrs'] = (jobs_df['finish_time'] - jobs_df['start_time']).dt.total_seconds() / 3600
-        
+
         c1, c2, c3 = st.columns(3)
         c1.metric("Projected Revenue", f"{CURRENCY}{jobs_df['contract_value'].sum():,.2f}")
         c2.metric("Active Jobs", jobs_df['job_name'].nunique())
-        c3.metric("Machine Load", f"{jobs_df['machine'].nunique()} Assets")
+        c3.metric("Machine Assets Active", jobs_df['machine'].nunique())
         
+        st.divider()
+        st.subheader("⚙️ Capacity Load by Machine")
+        load_df = jobs_df.groupby('machine')['duration_hrs'].sum().reset_index().sort_values('duration_hrs')
+        fig_load = px.bar(load_df, x='duration_hrs', y='machine', orientation='h', template="plotly_white", 
+                          color='duration_hrs', color_continuous_scale='Blues', labels={'duration_hrs': 'Booked Hours'})
+        st.plotly_chart(fig_load, use_container_width=True)
+
         st.divider()
         st.subheader("📋 Client Project Status")
         for job_name, group in jobs_df.groupby('job_name'):
             total_rev = group['contract_value'].sum()
             final_ready = group['finish_time'].max().strftime('%A, %b %d at %I:%M %p')
-            with st.expander(f"💼 {job_name.upper()} | Ready: {final_ready}"):
+            with st.expander(f"💼 {job_name.upper()} | Value: {CURRENCY}{total_rev:,.2f} | Final Ready: {final_ready}"):
                 detail_df = group[['machine', 'finish_time']].copy()
                 detail_df['Completion'] = detail_df['finish_time'].dt.strftime('%b %d, %I:%M %p')
                 st.table(detail_df[['machine', 'Completion']])
@@ -145,41 +156,33 @@ with tab_dash:
                     if delete_job(job_name): st.rerun()
     else: st.info("The production queue is currently empty.")
 
-# --- 2. PLAN NEW JOB (WITH FUTURE START) ---
+# --- 2. PLAN NEW JOB ---
 with tab_plan:
     with st.form("new_job", clear_on_submit=True):
-        st.subheader("📝 Job Details")
+        st.subheader("📝 Simulation Parameters")
         c1, c2 = st.columns(2)
-        name = c1.text_input("Client/Job Name")
-        rep = c2.selectbox("Sales Rep", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
+        name = c1.text_input("Client/Job Name", placeholder="e.g., ABC Magazine")
+        rep = c2.selectbox("Assigned Sales Rep", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
         
         q, u, v = st.columns(3)
         qty = q.number_input("Total Quantity", min_value=1, value=5000)
         ups_v = u.number_input("Ups per Sheet", min_value=1, value=1)
-        val = v.number_input("Total Value", min_value=0.0, value=1000.0)
+        val = v.number_input("Total Contract Value", min_value=0.0, value=1000.0)
         
-        procs = st.multiselect("Machine Routing", list(MACHINE_DATA.keys()))
+        procs = st.multiselect("Machine Routing (In Production Order)", list(MACHINE_DATA.keys()))
         
-        st.divider()
-        st.subheader("📅 Production Start Timing")
-        sc1, sc2 = st.columns(2)
-        start_date = sc1.date_input("Scheduled Start Date", value=datetime.now(timezone.utc).date())
-        start_time = sc2.time_input("Scheduled Start Time", value=time(8, 0)) # Default to 8am start
-        
-        # Merge date and time into a single UTC object
-        combined_start_dt = datetime.combine(start_date, start_time).replace(tzinfo=timezone.utc)
-        
+        st.markdown("---")
         st.subheader("🕒 Operational Overrides")
         col_a, col_b = st.columns(2)
-        night = col_a.toggle("🌙 Enable Night Shift")
-        wknd = col_b.toggle("📅 Include Weekends")
+        night = col_a.toggle("🌙 Enable Night Shift (Run through the night)")
+        wknd = col_b.toggle("📅 Include Weekends (Run Sat/Sun)")
         
         if st.form_submit_button("Commit to Live Schedule"):
             if name and procs:
-                add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night, wknd, combined_start_dt)
-                st.success(f"Job '{name}' scheduled successfully!")
+                add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night, wknd)
+                st.success(f"Job '{name}' has been added to the queue!")
                 st.rerun()
-            else: st.error("Please fill in the Job Name and Machine Processes.")
+            else: st.error("Please provide both a Client Name and at least one Machine Process.")
 
 # --- 3. PRODUCTION CONTROL ---
 with tab_control:
@@ -187,8 +190,19 @@ with tab_control:
     if not jobs_df.empty:
         jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='ISO8601', utc=True)
         jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='ISO8601', utc=True)
-        st.subheader("GANTT Chart View")
-        fig = px.timeline(jobs_df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
-        fig.update_layout(height=450, xaxis=dict(title="Timeline", side="top"), yaxis=dict(title="", autorange="reversed"))
+        
+        st.subheader(" GANTT Chart View")
+        fig = px.timeline(jobs_df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
+                          template="plotly_white", hover_data=["sales_rep"])
+        fig.update_layout(height=450, showlegend=True, xaxis=dict(title="Production Timeline", side="top"), yaxis=dict(title="", autorange="reversed"))
         st.plotly_chart(fig, use_container_width=True)
-    else: st.info("No active production schedules.")
+
+        st.divider()
+        st.subheader("📅 Dispatch Manifest")
+        for job_name, stages in jobs_df.sort_values('finish_time').groupby('job_name', sort=False):
+            with st.expander(f"📦 {job_name.upper()} Delivery Schedule"):
+                disp = stages[['machine', 'start_time', 'finish_time']].copy()
+                disp['Machine Start'] = disp['start_time'].dt.strftime('%b %d, %H:%M')
+                disp['Estimated Finish'] = disp['finish_time'].dt.strftime('%b %d, %H:%M')
+                st.table(disp[['machine', 'Machine Start', 'Estimated Finish']])
+    else: st.info("No production schedules to display.")
