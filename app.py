@@ -281,11 +281,50 @@ with tab_control:
 
 with tab_track:
     st.markdown("### 🚛 Order Tracking")
-    sid = st.text_input("Enter Tracking ID").upper()
+    sid = st.text_input("Enter Tracking ID (e.g., AT-1416)").upper().strip()
+    
     if sid:
         all_j = get_db_jobs()
         if not all_j.empty:
-            match = all_j[all_j['tracking_id'] == sid]
+            # Filter for all stages of this specific tracking ID
+            match = all_j[all_j['tracking_id'] == sid].copy()
+            
             if not match.empty:
-                st.progress(0.65) # Mock progress
-                st.info(f"Job Status: In Production ({len(match)} stages)")
+                # Ensure finish_time is a datetime object for sorting
+                match['finish_time'] = pd.to_datetime(match['finish_time'], utc=True)
+                match = match.sort_values('finish_time')
+                
+                # Calculate overall job status
+                final_deadline = match['finish_time'].max()
+                total_stages = len(match)
+                completed_stages = len(match[match['finish_time'] < datetime.now(timezone.utc)])
+                progress = completed_stages / total_stages
+                
+                # Professional Status Header
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    st.success(f"**Project Identified:** {match['job_name'].iloc[0]}")
+                    st.write(f"📅 **Estimated Completion:** {final_deadline.strftime('%A, %b %d at %I:%M %p')}")
+                with c2:
+                    st.metric("Overall Progress", f"{int(progress * 100)}%")
+
+                st.progress(progress)
+                
+                st.markdown("#### ⚙️ Production Roadmap")
+                # Create a visual step-by-step list
+                for i, row in match.iterrows():
+                    is_done = row['finish_time'] < datetime.now(timezone.utc)
+                    status_icon = "✅" if is_done else "⏳"
+                    status_text = "Completed" if is_done else "In Progress / Pending"
+                    
+                    st.markdown(f"""
+                    <div style="padding:10px; border-radius:8px; background-color:#f8fafc; border:1px solid #e2e8f0; margin-bottom:5px;">
+                        <span style="font-size:1.2rem;">{status_icon}</span> 
+                        <strong>Stage {match.index.get_loc(i) + 1}: {row['machine']}</strong><br>
+                        <small style="color:#64748b;">Status: {status_text} | Ready by: {row['finish_time'].strftime('%b %d, %H:%M')}</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.warning("Tracking ID not found. Please verify the ID and try again.")
+        else:
+            st.error("No production data available in the system.")
