@@ -7,27 +7,84 @@ from supabase import create_client, Client
 import plotly.express as px
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Appointed Time - Elite Planner", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Appointed Time | Elite", layout="wide", page_icon="🏢")
 
 # --- 2. GLOBAL SETUP & TARGETS ---
 CURRENCY = "GH₵"
-ANNUAL_REVENUE_TARGET = 2000000.00
+ANNUAL_REVENUE_TARGET = 105000000.00
 SETUP_HOURS = 2.0  
 DAILY_CAPACITY_HOURS = 9.0  
 
-# Custom CSS
+# Custom CSS for Professional UI
 st.markdown("""
     <style>
-    .main { background-color: #f8fafc; }
-    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 800; color: #1e3a8a; }
-    .stTabs [data-baseweb="tab"] { height: 50px; background-color: #ffffff; border-radius: 8px 8px 0 0; margin-right: 4px; border: 1px solid #e2e8f0; }
-    .stTabs [aria-selected="true"] { background-color: #1e3a8a !important; color: white !important; }
-    .header-style { font-size: 2.2rem; font-weight: 900; color: #1e3a8a; border-bottom: 3px solid #1e3a8a; margin-bottom: 20px; }
-    .status-open { color: #16a34a; font-weight: bold; text-align: right; }
-    .status-closed { color: #dc2626; font-weight: bold; text-align: right; }
-    .tracking-card { padding: 20px; border-radius: 10px; border: 1px solid #e2e8f0; background: white; margin-bottom: 10px; }
-    .health-card { padding: 15px; border-radius: 8px; border-left: 5px solid #e2e8f0; background: #ffffff; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
-    .profit-panel { background-color: #eff6ff; padding: 20px; border-radius: 12px; border: 1px solid #bfdbfe; margin-bottom: 20px; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    
+    .main { background-color: #f1f5f9; }
+    
+    /* Metric Card Styling */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        border: 1px solid #e2e8f0;
+    }
+    
+    [data-testid="stMetricValue"] { font-size: 2rem; color: #0f172a; }
+
+    /* Tab Styling */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] {
+        height: 45px;
+        white-space: pre;
+        background-color: #f8fafc;
+        border-radius: 8px;
+        color: #64748b;
+        border: 1px solid #e2e8f0;
+        transition: all 0.3s;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #1e40af !important;
+        color: white !important;
+        box-shadow: 0 4px 12px rgba(30, 64, 175, 0.2);
+    }
+
+    /* Cards & Containers */
+    .health-card {
+        padding: 20px;
+        border-radius: 12px;
+        background: white;
+        border-left: 6px solid #e2e8f0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        margin-bottom: 15px;
+    }
+    
+    .profit-panel {
+        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        padding: 25px;
+        border-radius: 15px;
+        border: 1px solid #bae6fd;
+        margin-bottom: 25px;
+    }
+
+    .header-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 0;
+        margin-bottom: 2rem;
+        border-bottom: 2px solid #e2e8f0;
+    }
+    
+    .status-badge {
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -44,8 +101,7 @@ MACHINE_DATA = {
 
 @st.cache_resource
 def init_supabase():
-    try:
-        return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    try: return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     except: return None
 
 supabase: Client = init_supabase()
@@ -60,11 +116,10 @@ def is_working_time(dt, night_shift, weekend_work):
 def calculate_production_end(start_time, duration_hours, night_shift, weekend_work):
     current_time = start_time
     remaining_hours = duration_hours
-    step_minutes = 15
     while remaining_hours > 0:
         if is_working_time(current_time, night_shift, weekend_work):
-            remaining_hours -= (step_minutes / 60)
-        current_time += timedelta(minutes=step_minutes)
+            remaining_hours -= (15 / 60)
+        current_time += timedelta(minutes=15)
         if (current_time - start_time).days > 365: break 
     return current_time
 
@@ -80,173 +135,157 @@ def delete_job(job_name):
         return True
     except: return False
 
-def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work, start_date, material_costs, overhead_rate):
+def add_job_to_queue(name, rep, qty, ups, impressions, processes, total_value, night_shift, weekend_work, start_date, mat_costs, ovh_rate):
     now_base = datetime.combine(start_date, datetime.now().time()).replace(tzinfo=timezone.utc, microsecond=0)
     rev_per_step = total_value / len(processes) if processes else 0
-    mat_cost_per_step = material_costs / len(processes) if processes else 0
-    tracking_id = f"AT-{random.randint(1000, 9999)}"
-    current_jobs = get_db_jobs()
-    job_sequence_start = now_base
+    mat_per_step = mat_costs / len(processes) if processes else 0
+    tid = f"AT-{random.randint(1000, 9999)}"
+    df = get_db_jobs()
+    job_seq_start = now_base
 
     for proc in processes:
-        machine_free_at = now_base
-        if not current_jobs.empty:
-            current_jobs['finish_time'] = pd.to_datetime(current_jobs['finish_time'], format='ISO8601', utc=True)
-            m_jobs = current_jobs[current_jobs['machine'] == proc]
-            if not m_jobs.empty:
-                machine_free_at = max(now_base, m_jobs['finish_time'].max())
+        m_free = now_base
+        if not df.empty:
+            df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
+            m_jobs = df[df['machine'] == proc]
+            if not m_jobs.empty: m_free = max(now_base, m_jobs['finish_time'].max())
 
-        actual_start = max(machine_free_at, job_sequence_start)
-        while not is_working_time(actual_start, night_shift, weekend_work):
-            actual_start += timedelta(minutes=15)
-
-        duration = SETUP_HOURS + (impressions / MACHINE_DATA[proc]['rate'])
-        actual_finish = calculate_production_end(actual_start, duration, night_shift, weekend_work)
-        job_sequence_start = actual_finish
-        step_overhead = duration * overhead_rate
-        step_net_profit = rev_per_step - mat_cost_per_step - step_overhead
-
+        start = max(m_free, job_seq_start)
+        while not is_working_time(start, night_shift, weekend_work): start += timedelta(minutes=15)
+        
+        dur = SETUP_HOURS + (impressions / MACHINE_DATA[proc]['rate'])
+        finish = calculate_production_end(start, dur, night_shift, weekend_work)
+        job_seq_start = finish
+        
         supabase.table('jobs').insert({
-            "job_name": name, "sales_rep": rep, "quantity": qty,
-            "ups": ups, "impressions": impressions,
-            "contract_value": float(rev_per_step), "machine": proc,
-            "start_time": actual_start.isoformat(), "finish_time": actual_finish.isoformat(),
-            "material_costs": float(mat_cost_per_step),
-            "overhead_rate": float(overhead_rate),
-            "net_profit": float(step_net_profit),
-            "tracking_id": tracking_id
+            "job_name": name, "sales_rep": rep, "quantity": qty, "ups": ups,
+            "impressions": impressions, "contract_value": float(rev_per_step),
+            "machine": proc, "start_time": start.isoformat(), "finish_time": finish.isoformat(),
+            "material_costs": float(mat_per_step), "overhead_rate": float(ovh_rate),
+            "net_profit": float(rev_per_step - mat_per_step - (dur * ovh_rate)),
+            "tracking_id": tid
         }).execute()
-    return tracking_id
+    return tid
 
-# --- 5. UI HEADER ---
-c_head, c_status = st.columns([3, 1])
-c_head.markdown('<div class="header-style">🏢 Appointed Time Production Intelligence</div>', unsafe_allow_html=True)
+# --- 5. SIDEBAR & HEADER ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/2761/2761008.png", width=80)
+    st.title("System Status")
+    now_gmt = datetime.now(timezone.utc)
+    open_status = is_working_time(now_gmt, False, False)
+    
+    if open_status:
+        st.success("● SHOP ONLINE")
+    else:
+        st.error("○ SHOP CLOSED")
+    
+    st.divider()
+    st.info("System v2.4 Elite\nProduction Intelligence")
 
-now_gmt = datetime.now(timezone.utc)
-is_open = is_working_time(now_gmt, False, False)
-status_label = '● SHOP OPEN' if is_open else '○ SHOP CLOSED'
-status_class = 'status-open' if is_open else 'status-closed'
-c_status.markdown(f"<div style='padding-top: 25px;' class='{status_class}'>{status_label}</div>", unsafe_allow_html=True)
+st.markdown('<div class="header-container"><div><h1 style="margin:0; color:#1e3a8a;">🏢 Appointed Time</h1><p style="color:#64748b; margin:0;">Operational Excellence & Financial Intelligence</p></div></div>', unsafe_allow_html=True)
 
-tab_dash, tab_plan, tab_control, tab_track = st.tabs(["📊 Executive Dashboard", "📝 New Simulation", "📅 Production Control", "🚛 Track & Trace"])
+tab_dash, tab_plan, tab_control, tab_track = st.tabs(["📊 DASHBOARD", "📝 SIMULATION", "📅 CONTROL", "🚛 TRACKING"])
 
 # --- 6. DASHBOARD TAB ---
 with tab_dash:
-    jobs_df = get_db_jobs()
-    if not jobs_df.empty:
-        jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='ISO8601', utc=True)
-        jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='ISO8601', utc=True)
-        jobs_df['duration_hrs'] = (jobs_df['finish_time'] - jobs_df['start_time']).dt.total_seconds() / 3600
+    df = get_db_jobs()
+    if not df.empty:
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
+        df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
+        df['duration_hrs'] = (df['finish_time'] - df['start_time']).dt.total_seconds() / 3600
 
-        projected_rev = jobs_df['contract_value'].sum()
-        total_net_profit = jobs_df.get('net_profit', pd.Series([0])).sum(skipna=True)
-        margin_pct = (total_net_profit / projected_rev * 100) if projected_rev > 0 else 0
-
-        st.subheader("💰 Financial Performance")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Current Projected Revenue", f"{CURRENCY}{projected_rev:,.2f}")
-        m2.metric("Estimated Net Profit", f"{CURRENCY}{total_net_profit:,.2f}")
-        m3.metric("Overall Profit Margin", f"{margin_pct:.1f}%")
-        m4.metric("Active Jobs", jobs_df['job_name'].nunique())
+        m1.metric("Projected Revenue", f"{CURRENCY}{df['contract_value'].sum():,.2f}")
+        m2.metric("Net Profit", f"{CURRENCY}{df['net_profit'].sum():,.2f}")
+        m3.metric("Avg Margin", f"{(df['net_profit'].sum()/df['contract_value'].sum()*100):.1f}%")
+        m4.metric("Live Queue", df['job_name'].nunique())
 
-        st.divider()
-        st.subheader("📉 Machine Health & OEE (Efficiency)")
-        oee_data = jobs_df.groupby('machine').agg({'duration_hrs': 'sum', 'overhead_rate': 'mean'}).reset_index()
+        st.markdown("### 📉 Machine Efficiency (OEE)")
+        oee = df.groupby('machine').agg({'duration_hrs': 'sum', 'overhead_rate': 'mean'}).reset_index()
         cols = st.columns(3)
-        for idx, row in oee_data.iterrows():
-            util_pct = (row['duration_hrs'] / DAILY_CAPACITY_HOURS) * 100
-            idle_hrs = max(0, DAILY_CAPACITY_HOURS - row['duration_hrs'])
-            idle_cost = idle_hrs * row['overhead_rate']
-            color = "#16a34a" if util_pct > 70 else ("#f59e0b" if util_pct > 40 else "#dc2626")
-            with cols[idx % 3]:
-                st.markdown(f'<div class="health-card" style="border-left-color: {color};"><strong>{row["machine"]}</strong><br><span style="color: {color}; font-weight: bold;">{util_pct:.1f}% Utilization</span><br><small>Idle Cost: {CURRENCY}{idle_cost:,.2f}</small></div><br>', unsafe_allow_html=True)
+        for i, row in oee.iterrows():
+            util = (row['duration_hrs'] / DAILY_CAPACITY_HOURS) * 100
+            color = "#16a34a" if util > 70 else ("#f59e0b" if util > 40 else "#dc2626")
+            with cols[i % 3]:
+                st.markdown(f'<div class="health-card" style="border-left-color: {color};"><strong>{row["machine"]}</strong><br><span style="color:{color}; font-size:1.2rem; font-weight:800;">{util:.1f}%</span> Utilization</div>', unsafe_allow_html=True)
 
-        st.divider()
-        st.subheader("📋 Project Details")
-        for job_name, group in jobs_df.groupby('job_name'):
-            t_id = group['tracking_id'].iloc[0] if 'tracking_id' in group.columns else "N/A"
-            with st.expander(f"💼 {job_name.upper()} | ID: {t_id}"):
-                st.write(f"**Tracking ID:** `{t_id}` | **Value:** {CURRENCY}{group['contract_value'].sum():,.2f}")
-                if st.button(f"Cancel Job", key=f"del_{job_name}"):
-                    if delete_job(job_name): st.rerun()
-    else: st.info("The production queue is currently empty.")
+        st.markdown("### 📋 Active Project Details")
+        for job, group in df.groupby('job_name'):
+            with st.expander(f"💼 {job.upper()} | ID: {group['tracking_id'].iloc[0]}"):
+                st.write(f"**Value:** {CURRENCY}{group['contract_value'].sum():,.2f}")
+                if st.button(f"Terminate Job", key=f"del_{job}"):
+                    if delete_job(job): st.rerun()
+    else: st.info("No active production found.")
 
-# --- 7. PLAN NEW JOB (WITH WHAT-IF ANALYSIS) ---
+# --- 7. SIMULATION TAB ---
 with tab_plan:
-    st.subheader("📝 Live Simulation & Profitability Analysis")
+    st.markdown("### 📝 Financial & Production Simulation")
+    col1, col2 = st.columns([2,1])
     
-    # 1. Input Section
-    c_in1, c_in2 = st.columns(2)
-    name = c_in1.text_input("Client/Job Name", placeholder="e.g. Graphic Press Ltd")
-    rep = c_in2.selectbox("Assigned Sales Rep", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
-    
-    q, u, v = st.columns(3)
-    qty = q.number_input("Total Quantity", min_value=1, value=5000)
-    ups_v = u.number_input("Ups per Sheet", min_value=1, value=1)
-    val = v.number_input("Total Contract Value (GH₵)", min_value=0.0, value=1500.0)
-    
-    cost1, cost2 = st.columns(2)
-    mat_costs = cost1.number_input("Estimated Material Costs (GH₵)", min_value=0.0, value=400.0)
-    ovh_rate = cost2.number_input("Hourly Overhead Rate (GH₵)", min_value=0.0, value=60.0)
+    with col1:
+        with st.container():
+            c1, c2 = st.columns(2)
+            name = c1.text_input("Client Name")
+            rep = c2.selectbox("Sales Representative", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
+            
+            q1, q2, q3 = st.columns(3)
+            qty = q1.number_input("Quantity", min_value=1, value=1000)
+            ups = q2.number_input("Ups", min_value=1, value=1)
+            val = q3.number_input("Total Contract (GH₵)", min_value=0.0, value=2000.0)
+            
+            p1, p2 = st.columns(2)
+            mat = p1.number_input("Material Cost (GH₵)", min_value=0.0, value=500.0)
+            ovh = p2.number_input("Overhead (GH₵/hr)", min_value=0.0, value=50.0)
+            
+            procs = st.multiselect("Select Machine Routing", list(MACHINE_DATA.keys()))
 
-    procs = st.multiselect("Machine Routing", list(MACHINE_DATA.keys()))
-    
-    # 2. Dynamic What-If Logic
-    if procs:
-        total_impressions = math.ceil(qty / ups_v)
-        total_prod_hrs = sum([(SETUP_HOURS + (total_impressions / MACHINE_DATA[p]['rate'])) for p in procs])
-        net_profit = val - mat_costs - (total_prod_hrs * ovh_rate)
-        profit_per_hr = net_profit / total_prod_hrs if total_prod_hrs > 0 else 0
-        margin = (net_profit / val * 100) if val > 0 else 0
-
-        # Profit Gauge Visual
-        p_color = "#dc2626" if profit_per_hr < 100 else ("#f59e0b" if profit_per_hr < 300 else "#16a34a")
-        st.markdown(f"""
-        <div class="profit-panel">
-            <h4 style="margin-top:0;">💰 Live Profitability Estimate</h4>
-            <div style="display: flex; justify-content: space-between;">
-                <div><small>Estimated Net Profit</small><br><strong>{CURRENCY}{net_profit:,.2f}</strong></div>
-                <div><small>Hourly Yield</small><br><strong style="color: {p_color};">{CURRENCY}{profit_per_hr:,.2f} / hr</strong></div>
-                <div><small>Margin</small><br><strong>{margin:.1f}%</strong></div>
-                <div><small>Production Time</small><br><strong>{total_prod_hrs:.1f} hrs</strong></div>
+    with col2:
+        if procs:
+            total_h = sum([(SETUP_HOURS + (math.ceil(qty/ups)/MACHINE_DATA[p]['rate'])) for p in procs])
+            profit = val - mat - (total_h * ovh)
+            y_hr = profit / total_h if total_h > 0 else 0
+            
+            st.markdown(f"""
+            <div class="profit-panel">
+                <h5 style='margin:0; color:#1e40af'>WHAT-IF ANALYSIS</h5>
+                <hr style='margin:10px 0; border:0; border-top:1px solid #bae6fd'>
+                <p style='margin:0; font-size:0.8rem; color:#64748b'>EST. NET PROFIT</p>
+                <h2 style='margin:0; color:#0f172a'>{CURRENCY}{profit:,.2f}</h2>
+                <br>
+                <p style='margin:0; font-size:0.8rem; color:#64748b'>HOURLY YIELD</p>
+                <h3 style='margin:0; color:#1e40af'>{CURRENCY}{y_hr:,.2f}/hr</h3>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # 3. Schedule Options & Submit
-    c_date, c_over = st.columns(2)
-    start_date = c_date.date_input("Scheduled Start Date", value=datetime.now().date())
-    with c_over:
-        night = st.toggle("🌙 Enable Night Shift")
-        wknd = st.toggle("📅 Include Weekends")
-    
-    if st.button("Commit to Live Schedule", use_container_width=True):
-        if name and procs:
-            tid = add_job_to_queue(name, rep, qty, ups_v, math.ceil(qty/ups_v), procs, val, night, wknd, start_date, mat_costs, ovh_rate)
-            st.success(f"Job Added! Tracking ID: {tid}")
-            st.rerun()
-        else: st.error("Please provide a Client Name and Machine Routing.")
+            """, unsafe_allow_html=True)
 
-# --- 8. PRODUCTION CONTROL & 9. TRACK & TRACE ---
+    st.divider()
+    s1, s2, s3 = st.columns(3)
+    date = s1.date_input("Start Date")
+    night = s2.toggle("Night Shift")
+    wknd = s3.toggle("Weekends")
+
+    if st.button("🚀 Push to Production Line", use_container_width=True):
+        if name and procs:
+            tid = add_job_to_queue(name, rep, qty, ups, math.ceil(qty/ups), procs, val, night, wknd, date, mat, ovh)
+            st.success(f"Job Logged. Tracking ID: {tid}")
+            st.rerun()
+
+# --- 8. CONTROL & 9. TRACKING ---
 with tab_control:
-    jobs_df = get_db_jobs()
-    if not jobs_df.empty:
-        jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='ISO8601', utc=True)
-        jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='ISO8601', utc=True)
-        fig = px.timeline(jobs_df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
+    df = get_db_jobs()
+    if not df.empty:
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
+        df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
+        fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white", color_discrete_sequence=px.colors.qualitative.Prism)
+        fig.update_layout(showlegend=False, height=400)
         st.plotly_chart(fig, use_container_width=True)
 
 with tab_track:
-    st.subheader("🚛 Client Order Tracking")
-    search_id = st.text_input("Enter Tracking ID").strip().upper()
-    if search_id:
-        all_jobs = get_db_jobs()
-        if not all_jobs.empty:
-            client_job = all_jobs[all_jobs['tracking_id'] == search_id].copy()
-            if not client_job.empty:
-                client_job['finish_time'] = pd.to_datetime(client_job['finish_time'], format='ISO8601', utc=True)
-                completed_steps = len(client_job[client_job['finish_time'] < datetime.now(timezone.utc)])
-                st.progress(completed_steps / len(client_job))
-                for _, row in client_job.sort_values('finish_time').iterrows():
-                    icon = "✅" if row['finish_time'] < datetime.now(timezone.utc) else "⏳"
-                    st.write(f"{icon} {row['machine']} - Ready: {row['finish_time'].strftime('%b %d, %I:%M %p')}")
+    st.markdown("### 🚛 Order Tracking")
+    sid = st.text_input("Enter Tracking ID").upper()
+    if sid:
+        all_j = get_db_jobs()
+        if not all_j.empty:
+            match = all_j[all_j['tracking_id'] == sid]
+            if not match.empty:
+                st.progress(0.65) # Mock progress
+                st.info(f"Job Status: In Production ({len(match)} stages)")
