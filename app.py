@@ -7,7 +7,7 @@ from supabase import create_client, Client
 import plotly.express as px
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Appointed Time | Elite Planner", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Appointed Time | Command Center", layout="wide", page_icon="🏢")
 
 # --- 2. GLOBAL SETUP ---
 CURRENCY = "GH₵"
@@ -35,6 +35,8 @@ st.markdown("""
     .main { background-color: #f1f5f9; }
     .component-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 15px; }
     .profit-panel { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 25px; border-radius: 15px; position: sticky; top: 20px; }
+    .status-done { color: #16a34a; font-weight: bold; }
+    .status-pending { color: #f59e0b; font-weight: bold; }
     div[data-testid="stMetric"] { background-color: white; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
     </style>
     """, unsafe_allow_html=True)
@@ -65,6 +67,12 @@ def get_db_jobs():
     if not supabase: return pd.DataFrame()
     res = supabase.table('jobs').select("*").execute()
     return pd.DataFrame(res.data)
+
+def delete_job(job_name):
+    try:
+        supabase.table('jobs').delete().eq('job_name', job_name).execute()
+        return True
+    except: return False
 
 def add_multi_part_job(job_data):
     tid = f"AT-{random.randint(1000, 9999)}"
@@ -111,12 +119,12 @@ def add_multi_part_job(job_data):
     return tid
 
 # --- 6. UI TABS ---
-tab_dash, tab_plan, tab_control, tab_track = st.tabs(["📊 DASHBOARD", "📝 SIMULATION", "📅 CONTROL", "🚛 TRACKING"])
+tab_dash, tab_plan, tab_control = st.tabs(["📊 DASHBOARD", "📝 SIMULATION", "📅 PRODUCTION CONTROL"])
 
+# --- DASHBOARD ---
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
-        # FIXED: Using ISO8601 format for robust date parsing
         df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
         df['duration_hrs'] = (df['finish_time'] - df['start_time']).dt.total_seconds() / 3600
@@ -125,7 +133,7 @@ with tab_dash:
         m1.metric("Projected Revenue", f"{CURRENCY}{df['contract_value'].sum():,.2f}")
         m2.metric("Net Profit", f"{CURRENCY}{df['net_profit'].sum():,.2f}")
         m3.metric("Avg Margin", f"{(df['net_profit'].sum()/df['contract_value'].sum()*100 if df['contract_value'].sum()>0 else 0):.1f}%")
-        m4.metric("Live Queue", df['job_name'].nunique())
+        m4.metric("Active Jobs", df['job_name'].nunique())
 
         st.markdown("### 📉 Machine Utilization")
         oee = df.groupby('machine').agg({'duration_hrs': 'sum'}).reset_index()
@@ -135,58 +143,57 @@ with tab_dash:
             with cols[i % 3]:
                 st.write(f"**{row['machine']}**")
                 st.progress(min(util/100, 1.0))
-    else: st.info("No active production found.")
+    else: st.info("No data available.")
 
+# --- SIMULATION ---
 with tab_plan:
-    st.subheader("📝 Multi-Component Production Planner")
+    st.subheader("📝 Multi-Component Project Entry")
     c1, c2, c3 = st.columns([2, 1, 1])
     job_name = c1.text_input("Project Name")
     sales_rep = c2.selectbox("Sales Representative", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
-    total_val = c3.number_input("Total Contract Value", min_value=0.0, value=5000.0)
+    total_val = c3.number_input("Contract Value", min_value=0.0, value=5000.0)
 
     col_input, col_viz = st.columns([2, 1])
     with col_input:
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
-            st.markdown("### 📔 Part 1: Cover Specs")
+            st.markdown("### 📔 Part 1: Cover")
             cc1, cc2, cc3 = st.columns(3)
             cov_qty = cc1.number_input("Qty", value=1000)
             cov_ups = cc2.number_input("Ups", value=2)
-            cov_mat = cc3.number_input("Paper Cost", value=200.0)
-            cov_route = st.multiselect("Manual Routing: Cover", list(MACHINE_DATA.keys()))
+            cov_mat = cc3.number_input("Material Cost", value=200.0)
+            cov_route = st.multiselect("Routing: Cover", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
-            st.markdown("### 📄 Part 2: Inner Text Specs")
+            st.markdown("### 📄 Part 2: Inners")
             tc1, tc2, tc3 = st.columns(3)
-            pages = tc1.number_input("Pages", value=64)
-            sig_size = tc2.selectbox("Sig Size", [8, 16, 32], index=1)
-            text_mat = tc3.number_input("Paper Cost ", value=800.0)
+            pages = tc1.number_input("Total Pages", value=64)
+            sig_size = tc2.selectbox("Signature Size", [8, 16, 32], index=1)
+            text_mat = tc3.number_input("Material Cost ", value=800.0)
             text_impressions = math.ceil(pages / sig_size) * cov_qty
-            text_route = st.multiselect("Manual Routing: Inners", list(MACHINE_DATA.keys()))
+            text_route = st.multiselect("Routing: Inners", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
             st.markdown("### 🛠️ Part 3: Finishing")
-            fin_route = st.multiselect("Manual Routing: Binding", list(MACHINE_DATA.keys()))
+            fin_route = st.multiselect("Routing: Finishing", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
     with col_viz:
         ovh_rate = st.number_input("Overhead (GH₵/hr)", value=60.0)
         est_hrs = (len(cov_route + text_route + fin_route) * SETUP_HOURS) 
         net_profit = total_val - (cov_mat + text_mat) - (est_hrs * ovh_rate)
-        
         st.markdown(f'<div class="profit-panel"><h3>{CURRENCY}{net_profit:,.2f}</h3><p>Est. Net Profit</p><hr><p>Margin: {(net_profit/total_val*100 if total_val>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
 
     s1, s2, s3 = st.columns(3)
-    start_date = s1.date_input("Schedule Start")
+    start_date = s1.date_input("Start Date")
     night = s2.toggle("🌙 Night Shift")
     wknd = s3.toggle("📅 Weekends")
     
-    # FIXED: Reverted to use_container_width for buttons (standard behavior)
-    if st.button("🚀 Commit Full Project", use_container_width=True):
+    if st.button("🚀 Commit to Production", use_container_width=True):
         if job_name and sales_rep:
             payload = {
                 "name": job_name, "sales_rep": sales_rep, "total_qty": cov_qty, "total_val": total_val,
@@ -198,30 +205,48 @@ with tab_plan:
                 ],
                 "finishing_machines": fin_route
             }
-            tid = add_multi_part_job(payload)
-            st.success(f"Project Queued! ID: {tid}")
+            add_multi_part_job(payload)
+            st.success("Project Logged.")
             st.rerun()
 
+# --- PRODUCTION CONTROL ---
 with tab_control:
+    st.subheader("📅 Live Factory Schedule")
     df = get_db_jobs()
     if not df.empty:
-        # FIXED: ISO8601 parsing for Gantt Chart
         df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
+        
+        # 1. Visual Gantt Chart
         fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
+        fig.update_yaxes(autorange="reversed")
         st.plotly_chart(fig, use_container_width=True)
 
-with tab_track:
-    st.markdown("### 🚛 Order Tracking")
-    sid = st.text_input("Enter Tracking ID").upper().strip()
-    if sid:
-        df = get_db_jobs()
-        if not df.empty:
-            # FIXED: ISO8601 parsing for Tracking
-            df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
-            match = df[df['tracking_id'] == sid].sort_values('finish_time')
-            if not match.empty:
-                st.success(f"Project: {match['job_name'].iloc[0]}")
-                st.write(f"Estimated Completion: {match['finish_time'].max().strftime('%b %d, %I:%M %p')}")
-                for _, row in match.iterrows():
-                    st.write(f"- {row['machine']}: Ready by {row['finish_time'].strftime('%b %d, %H:%M')}")
+        st.divider()
+        st.subheader("📋 Active Job Ledger")
+        
+        # 2. Expandable Job Details
+        now = datetime.now(timezone.utc)
+        for job_name, group in df.groupby('job_name'):
+            with st.expander(f"💼 {job_name.upper()} | Sales Rep: {group['sales_rep'].iloc[0]}"):
+                
+                # Show tabular data for this job's processes
+                table_data = []
+                for _, row in group.sort_values('finish_time').iterrows():
+                    status = "✅ Done" if row['finish_time'] < now else "⏳ In Progress"
+                    table_data.append({
+                        "Machine/Process": row['machine'],
+                        "Start": row['start_time'].strftime('%b %d, %H:%M'),
+                        "Ready By": row['finish_time'].strftime('%b %d, %H:%M'),
+                        "Status": status
+                    })
+                
+                st.table(pd.DataFrame(table_data))
+                
+                # Internal Job Actions
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Est. Profit", f"{CURRENCY}{group['net_profit'].sum():,.2f}")
+                if c3.button(f"Terminate {job_name}", key=f"del_{job_name}"):
+                    if delete_job(job_name): st.rerun()
+    else:
+        st.info("No active jobs in production.")
