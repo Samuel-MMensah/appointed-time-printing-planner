@@ -1,5 +1,5 @@
 import streamlit as st
-import pd as pd
+import pandas as pd  # Fixed this line
 from datetime import datetime, timedelta, timezone
 import math
 import random
