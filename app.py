@@ -66,20 +66,15 @@ def get_db_jobs():
     res = supabase.table('jobs').select("*").execute()
     return pd.DataFrame(res.data)
 
-def delete_job(job_name):
-    try:
-        supabase.table('jobs').delete().eq('job_name', job_name).execute()
-        return True
-    except: return False
-
 def add_multi_part_job(job_data):
     tid = f"AT-{random.randint(1000, 9999)}"
     comp_finish_times = []
     
-    # Calculate number of stages to distribute financials
+    # Calculate total steps for financial distribution
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
     profit_per_stage = job_data['net_profit'] / total_stages if total_stages > 0 else 0
+    mat_per_stage = job_data['total_mat'] / total_stages if total_stages > 0 else 0
 
     for comp in job_data['components']:
         if not comp['machines']: continue
@@ -89,27 +84,37 @@ def add_multi_part_job(job_data):
             dur = SETUP_HOURS + (comp['impressions'] / MACHINE_DATA[machine]['rate'])
             finish = calculate_finish(comp_start, dur, job_data['night'], job_data['weekend'])
             
+            # ALL database columns must be present to avoid 23502 error
             supabase.table('jobs').insert({
-                "job_name": job_data['name'], "tracking_id": tid, "machine": machine,
-                "sales_rep": job_data['sales_rep'], # FIXED: Added sales_rep
-                "start_time": comp_start.isoformat(), "finish_time": finish.isoformat(),
-                "net_profit": float(profit_per_stage), "contract_value": float(val_per_stage),
-                "quantity": job_data['total_qty']
+                "job_name": job_data['name'], 
+                "tracking_id": tid, 
+                "machine": machine,
+                "sales_rep": job_data['sales_rep'],
+                "quantity": int(job_data['total_qty']),
+                "ups": int(comp.get('ups', 1)),
+                "impressions": int(comp['impressions']),
+                "start_time": comp_start.isoformat(), 
+                "finish_time": finish.isoformat(),
+                "net_profit": float(profit_per_stage), 
+                "contract_value": float(val_per_stage),
+                "material_costs": float(mat_per_stage),
+                "overhead_rate": float(job_data['ovh_rate'])
             }).execute()
             comp_start = finish
         comp_finish_times.append(comp_start)
 
     if job_data['finishing_machines']:
-        finish_start = max(comp_finish_times)
+        finish_start = max(comp_finish_times) if comp_finish_times else datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
         for f_mach in job_data['finishing_machines']:
             f_dur = SETUP_HOURS + (job_data['total_qty'] / MACHINE_DATA[f_mach]['rate'])
             f_finish = calculate_finish(finish_start, f_dur, job_data['night'], job_data['weekend'])
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": f_mach,
-                "sales_rep": job_data['sales_rep'], # FIXED: Added sales_rep
+                "sales_rep": job_data['sales_rep'],
+                "quantity": int(job_data['total_qty']), "ups": 1, "impressions": int(job_data['total_qty']),
                 "start_time": finish_start.isoformat(), "finish_time": f_finish.isoformat(),
                 "net_profit": float(profit_per_stage), "contract_value": float(val_per_stage),
-                "quantity": job_data['total_qty']
+                "material_costs": 0.0, "overhead_rate": float(job_data['ovh_rate'])
             }).execute()
             finish_start = f_finish
     return tid
@@ -117,7 +122,6 @@ def add_multi_part_job(job_data):
 # --- 6. UI TABS ---
 tab_dash, tab_plan, tab_control, tab_track = st.tabs(["📊 DASHBOARD", "📝 SIMULATION", "📅 CONTROL", "🚛 TRACKING"])
 
-# --- DASHBOARD LOGIC ---
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
@@ -128,7 +132,7 @@ with tab_dash:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Projected Revenue", f"{CURRENCY}{df['contract_value'].sum():,.2f}")
         m2.metric("Net Profit", f"{CURRENCY}{df['net_profit'].sum():,.2f}")
-        m3.metric("Avg Margin", f"{(df['net_profit'].sum()/df['contract_value'].sum()*100):.1f}%")
+        m3.metric("Avg Margin", f"{(df['net_profit'].sum()/df['contract_value'].sum()*100 if df['contract_value'].sum()>0 else 0):.1f}%")
         m4.metric("Live Queue", df['job_name'].nunique())
 
         st.markdown("### 📉 Machine Utilization")
@@ -137,15 +141,9 @@ with tab_dash:
         for i, row in oee.iterrows():
             util = (row['duration_hrs'] / DAILY_CAPACITY_HOURS) * 100
             with cols[i % 3]:
-                st.write(f"**{row['machine']}**: {util:.1f}%")
+                st.write(f"**{row['machine']}**")
                 st.progress(min(util/100, 1.0))
-        
-        if st.button("Clear Finished Jobs (Clean DB)"):
-             # Optional: add logic to delete older than 30 days
-             pass
-    else: st.info("No active production found.")
 
-# --- SIMULATION LOGIC ---
 with tab_plan:
     st.subheader("📝 Multi-Component Production Planner")
     c1, c2, c3 = st.columns([2, 1, 1])
@@ -155,7 +153,6 @@ with tab_plan:
 
     col_input, col_viz = st.columns([2, 1])
     with col_input:
-        # Part 1: Cover
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
             st.markdown("### 📔 Part 1: Cover Specs")
@@ -166,7 +163,6 @@ with tab_plan:
             cov_route = st.multiselect("Manual Routing: Cover", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Part 2: Inners
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
             st.markdown("### 📄 Part 2: Inner Text Specs")
@@ -178,7 +174,6 @@ with tab_plan:
             text_route = st.multiselect("Manual Routing: Inners", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Part 3: Finishing
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
             st.markdown("### 🛠️ Part 3: Finishing")
@@ -197,14 +192,15 @@ with tab_plan:
     night = s2.toggle("🌙 Night Shift")
     wknd = s3.toggle("📅 Weekends")
     
-    if st.button("🚀 Commit Full Project", use_container_width=True):
+    if st.button("🚀 Commit Full Project", width="stretch"):
         if job_name and sales_rep:
             payload = {
                 "name": job_name, "sales_rep": sales_rep, "total_qty": cov_qty, "total_val": total_val,
                 "start_date": start_date, "night": night, "weekend": wknd, "net_profit": net_profit,
+                "total_mat": (cov_mat + text_mat), "ovh_rate": ovh_rate,
                 "components": [
-                    {"name": "Cover", "impressions": cov_qty/cov_ups, "machines": cov_route},
-                    {"name": "Text", "impressions": text_impressions, "machines": text_route}
+                    {"name": "Cover", "impressions": cov_qty/cov_ups, "ups": cov_ups, "machines": cov_route},
+                    {"name": "Text", "impressions": text_impressions, "ups": 1, "machines": text_route}
                 ],
                 "finishing_machines": fin_route
             }
@@ -212,16 +208,14 @@ with tab_plan:
             st.success(f"Project Queued! ID: {tid}")
             st.rerun()
 
-# --- CONTROL TAB (Gantt) ---
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
         df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
         fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
-# --- TRACKING TAB ---
 with tab_track:
     st.markdown("### 🚛 Order Tracking")
     sid = st.text_input("Enter Tracking ID").upper().strip()
