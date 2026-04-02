@@ -7,7 +7,7 @@ from supabase import create_client, Client
 import plotly.express as px
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Appointed Time | Command Center", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Appointed Time | Production Control", layout="wide", page_icon="🏢")
 
 # --- 2. GLOBAL SETUP ---
 CURRENCY = "GH₵"
@@ -32,12 +32,11 @@ MACHINE_DATA = {
 # --- 3. CSS & STYLING ---
 st.markdown("""
     <style>
-    .main { background-color: #f1f5f9; }
+    .main { background-color: #f8fafc; }
     .component-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 15px; }
-    .profit-panel { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 25px; border-radius: 15px; position: sticky; top: 20px; }
     .status-done { color: #16a34a; font-weight: bold; }
-    .status-pending { color: #f59e0b; font-weight: bold; }
-    div[data-testid="stMetric"] { background-color: white; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
+    .status-pending { color: #2563eb; font-weight: bold; }
+    div[data-testid="stMetric"] { background-color: white; border: 1px solid #e2e8f0; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -75,13 +74,12 @@ def delete_job(job_name):
     except: return False
 
 def add_multi_part_job(job_data):
-    tid = f"AT-{random.randint(1000, 9999)}"
+    # Generates a hidden ID for internal linking only
+    tid = f"INT-{random.randint(1000, 9999)}"
     comp_finish_times = []
     
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
-    profit_per_stage = job_data['net_profit'] / total_stages if total_stages > 0 else 0
-    mat_per_stage = job_data['total_mat'] / total_stages if total_stages > 0 else 0
 
     for comp in job_data['components']:
         if not comp['machines']: continue
@@ -96,8 +94,7 @@ def add_multi_part_job(job_data):
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
                 "ups": int(comp.get('ups', 1)), "impressions": int(comp['impressions']),
                 "start_time": comp_start.isoformat(), "finish_time": finish.isoformat(),
-                "net_profit": float(profit_per_stage), "contract_value": float(val_per_stage),
-                "material_costs": float(mat_per_stage), "overhead_rate": float(job_data['ovh_rate'])
+                "contract_value": float(val_per_stage), "net_profit": 0, "material_costs": 0, "overhead_rate": 0
             }).execute()
             comp_start = finish
         comp_finish_times.append(comp_start)
@@ -111,9 +108,8 @@ def add_multi_part_job(job_data):
                 "job_name": job_data['name'], "tracking_id": tid, "machine": f_mach,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']), "ups": 1, 
                 "impressions": int(job_data['total_qty']), "start_time": finish_start.isoformat(), 
-                "finish_time": f_finish.isoformat(), "net_profit": float(profit_per_stage), 
-                "contract_value": float(val_per_stage), "material_costs": 0.0, 
-                "overhead_rate": float(job_data['ovh_rate'])
+                "finish_time": f_finish.isoformat(), "contract_value": float(val_per_stage), 
+                "net_profit": 0, "material_costs": 0, "overhead_rate": 0
             }).execute()
             finish_start = f_finish
     return tid
@@ -127,78 +123,69 @@ with tab_dash:
     if not df.empty:
         df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
-        df['duration_hrs'] = (df['finish_time'] - df['start_time']).dt.total_seconds() / 3600
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Projected Revenue", f"{CURRENCY}{df['contract_value'].sum():,.2f}")
-        m2.metric("Net Profit", f"{CURRENCY}{df['net_profit'].sum():,.2f}")
-        m3.metric("Avg Margin", f"{(df['net_profit'].sum()/df['contract_value'].sum()*100 if df['contract_value'].sum()>0 else 0):.1f}%")
-        m4.metric("Active Jobs", df['job_name'].nunique())
-
-        st.markdown("### 📉 Machine Utilization")
-        oee = df.groupby('machine').agg({'duration_hrs': 'sum'}).reset_index()
-        cols = st.columns(3)
-        for i, row in oee.iterrows():
-            util = (row['duration_hrs'] / DAILY_CAPACITY_HOURS) * 100
-            with cols[i % 3]:
-                st.write(f"**{row['machine']}**")
-                st.progress(min(util/100, 1.0))
-    else: st.info("No data available.")
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Active Projects", df['job_name'].nunique())
+        m2.metric("Projected Revenue", f"{CURRENCY}{df['contract_value'].sum():,.2f}")
+        m3.metric("Total Impressions", f"{int(df['impressions'].sum()):,}")
+        
+        st.divider()
+        st.markdown("### 🛠️ Machine Queue Length")
+        q_view = df[df['finish_time'] > datetime.now(timezone.utc)].groupby('machine').size().reset_index(name='Jobs Waiting')
+        st.bar_chart(q_view.set_index('machine'))
+    else:
+        st.info("No active production in system.")
 
 # --- SIMULATION ---
 with tab_plan:
-    st.subheader("📝 Multi-Component Project Entry")
+    st.subheader("📝 New Job Entry")
     c1, c2, c3 = st.columns([2, 1, 1])
-    job_name = c1.text_input("Project Name")
-    sales_rep = c2.selectbox("Sales Representative", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
-    total_val = c3.number_input("Contract Value", min_value=0.0, value=5000.0)
+    job_name = c1.text_input("Job Name / Description")
+    sales_rep = c2.selectbox("Sales Rep", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
+    total_val = c3.number_input("Total Quote (GH₵)", min_value=0.0, value=1000.0)
 
-    col_input, col_viz = st.columns([2, 1])
+    col_input, col_info = st.columns([2, 1])
     with col_input:
+        # Part 1: Cover
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
-            st.markdown("### 📔 Part 1: Cover")
-            cc1, cc2, cc3 = st.columns(3)
-            cov_qty = cc1.number_input("Qty", value=1000)
-            cov_ups = cc2.number_input("Ups", value=2)
-            cov_mat = cc3.number_input("Material Cost", value=200.0)
+            st.markdown("### 📔 Cover Component")
+            cc1, cc2 = st.columns(2)
+            cov_qty = cc1.number_input("Order Qty", value=1000)
+            cov_ups = cc2.number_input("Ups", value=1)
             cov_route = st.multiselect("Routing: Cover", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # Part 2: Inners
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
-            st.markdown("### 📄 Part 2: Inners")
-            tc1, tc2, tc3 = st.columns(3)
-            pages = tc1.number_input("Total Pages", value=64)
-            sig_size = tc2.selectbox("Signature Size", [8, 16, 32], index=1)
-            text_mat = tc3.number_input("Material Cost ", value=800.0)
+            st.markdown("### 📄 Text Component")
+            tc1, tc2 = st.columns(2)
+            pages = tc1.number_input("Total Pages", value=1)
+            sig_size = tc2.selectbox("Pages per Plate", [1, 2, 4, 8, 16, 32], index=0)
             text_impressions = math.ceil(pages / sig_size) * cov_qty
-            text_route = st.multiselect("Routing: Inners", list(MACHINE_DATA.keys()))
+            text_route = st.multiselect("Routing: Text", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # Part 3: Finishing
         with st.container():
             st.markdown('<div class="component-card">', unsafe_allow_html=True)
-            st.markdown("### 🛠️ Part 3: Finishing")
+            st.markdown("### 🛠️ Binding & Finishing")
             fin_route = st.multiselect("Routing: Finishing", list(MACHINE_DATA.keys()))
             st.markdown('</div>', unsafe_allow_html=True)
 
-    with col_viz:
-        ovh_rate = st.number_input("Overhead (GH₵/hr)", value=60.0)
-        est_hrs = (len(cov_route + text_route + fin_route) * SETUP_HOURS) 
-        net_profit = total_val - (cov_mat + text_mat) - (est_hrs * ovh_rate)
-        st.markdown(f'<div class="profit-panel"><h3>{CURRENCY}{net_profit:,.2f}</h3><p>Est. Net Profit</p><hr><p>Margin: {(net_profit/total_val*100 if total_val>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
+    with col_info:
+        st.info("**Production Summary**\n\nEnsure all stages are selected for accurate scheduling.")
+        s1, s2 = st.columns(2)
+        night = s1.toggle("Night Shift")
+        wknd = s2.toggle("Work Weekends")
+        start_date = st.date_input("Scheduled Start Date")
 
-    s1, s2, s3 = st.columns(3)
-    start_date = s1.date_input("Start Date")
-    night = s2.toggle("🌙 Night Shift")
-    wknd = s3.toggle("📅 Weekends")
-    
-    if st.button("🚀 Commit to Production", use_container_width=True):
-        if job_name and sales_rep:
+    if st.button("🚀 Push to Production Line", use_container_width=True):
+        if job_name:
             payload = {
                 "name": job_name, "sales_rep": sales_rep, "total_qty": cov_qty, "total_val": total_val,
-                "start_date": start_date, "night": night, "weekend": wknd, "net_profit": net_profit,
-                "total_mat": (cov_mat + text_mat), "ovh_rate": ovh_rate,
+                "start_date": start_date, "night": night, "weekend": wknd, "net_profit": 0,
                 "components": [
                     {"name": "Cover", "impressions": cov_qty/cov_ups, "ups": cov_ups, "machines": cov_route},
                     {"name": "Text", "impressions": text_impressions, "ups": 1, "machines": text_route}
@@ -206,47 +193,58 @@ with tab_plan:
                 "finishing_machines": fin_route
             }
             add_multi_part_job(payload)
-            st.success("Project Logged.")
+            st.success(f"Job '{job_name}' is now LIVE in Production Control.")
             st.rerun()
 
 # --- PRODUCTION CONTROL ---
 with tab_control:
-    st.subheader("📅 Live Factory Schedule")
+    st.subheader("📅 Live Shop Floor Status")
     df = get_db_jobs()
+    
     if not df.empty:
         df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
-        
-        # 1. Visual Gantt Chart
-        fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
+        now = datetime.now(timezone.utc)
+
+        # 1. Gantt Chart Overview
+        fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
+                          title="Machine Schedule Overview", template="plotly_white")
         fig.update_yaxes(autorange="reversed")
         st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
-        st.subheader("📋 Active Job Ledger")
+        st.markdown("### 📋 Production Details (Expand for Stages)")
         
-        # 2. Expandable Job Details
-        now = datetime.now(timezone.utc)
+        # 2. Tabular Job List with Expanders
         for job_name, group in df.groupby('job_name'):
-            with st.expander(f"💼 {job_name.upper()} | Sales Rep: {group['sales_rep'].iloc[0]}"):
+            group = group.sort_values('finish_time')
+            overall_finish = group['finish_time'].max()
+            is_complete = overall_finish < now
+            status_label = "✅ COMPLETED" if is_complete else "⏳ IN PROGRESS"
+            
+            with st.expander(f"{status_label} | {job_name.upper()} | Deadline: {overall_finish.strftime('%d %b, %H:%M')}"):
+                # Sales/Header Info
+                c1, c2, c3 = st.columns(3)
+                c1.write(f"**Sales Rep:** {group['sales_rep'].iloc[0]}")
+                c2.write(f"**Total Qty:** {int(group['quantity'].iloc[0]):,}")
+                c3.write(f"**Total Value:** {CURRENCY}{group['contract_value'].sum():,.2f}")
                 
-                # Show tabular data for this job's processes
-                table_data = []
-                for _, row in group.sort_values('finish_time').iterrows():
-                    status = "✅ Done" if row['finish_time'] < now else "⏳ In Progress"
-                    table_data.append({
-                        "Machine/Process": row['machine'],
-                        "Start": row['start_time'].strftime('%b %d, %H:%M'),
-                        "Ready By": row['finish_time'].strftime('%b %d, %H:%M'),
-                        "Status": status
+                # Internal Process Table
+                st.markdown("#### Process Roadmap")
+                process_data = []
+                for _, row in group.iterrows():
+                    step_status = "Done" if row['finish_time'] < now else "Pending"
+                    process_data.append({
+                        "Machine": row['machine'],
+                        "Impressions": f"{int(row['impressions']):,}",
+                        "Start Time": row['start_time'].strftime('%d %b, %H:%M'),
+                        "Finish Time": row['finish_time'].strftime('%d %b, %H:%M'),
+                        "Status": step_status
                     })
                 
-                st.table(pd.DataFrame(table_data))
+                st.table(pd.DataFrame(process_data))
                 
-                # Internal Job Actions
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Est. Profit", f"{CURRENCY}{group['net_profit'].sum():,.2f}")
-                if c3.button(f"Terminate {job_name}", key=f"del_{job_name}"):
+                if st.button(f"Terminate {job_name}", key=f"del_{job_name}"):
                     if delete_job(job_name): st.rerun()
     else:
-        st.info("No active jobs in production.")
+        st.info("No active jobs in the production table.")
