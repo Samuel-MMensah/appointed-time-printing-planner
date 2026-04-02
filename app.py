@@ -70,7 +70,6 @@ def add_multi_part_job(job_data):
     tid = f"AT-{random.randint(1000, 9999)}"
     comp_finish_times = []
     
-    # Calculate total steps for financial distribution
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
     profit_per_stage = job_data['net_profit'] / total_stages if total_stages > 0 else 0
@@ -84,21 +83,13 @@ def add_multi_part_job(job_data):
             dur = SETUP_HOURS + (comp['impressions'] / MACHINE_DATA[machine]['rate'])
             finish = calculate_finish(comp_start, dur, job_data['night'], job_data['weekend'])
             
-            # ALL database columns must be present to avoid 23502 error
             supabase.table('jobs').insert({
-                "job_name": job_data['name'], 
-                "tracking_id": tid, 
-                "machine": machine,
-                "sales_rep": job_data['sales_rep'],
-                "quantity": int(job_data['total_qty']),
-                "ups": int(comp.get('ups', 1)),
-                "impressions": int(comp['impressions']),
-                "start_time": comp_start.isoformat(), 
-                "finish_time": finish.isoformat(),
-                "net_profit": float(profit_per_stage), 
-                "contract_value": float(val_per_stage),
-                "material_costs": float(mat_per_stage),
-                "overhead_rate": float(job_data['ovh_rate'])
+                "job_name": job_data['name'], "tracking_id": tid, "machine": machine,
+                "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
+                "ups": int(comp.get('ups', 1)), "impressions": int(comp['impressions']),
+                "start_time": comp_start.isoformat(), "finish_time": finish.isoformat(),
+                "net_profit": float(profit_per_stage), "contract_value": float(val_per_stage),
+                "material_costs": float(mat_per_stage), "overhead_rate": float(job_data['ovh_rate'])
             }).execute()
             comp_start = finish
         comp_finish_times.append(comp_start)
@@ -110,11 +101,11 @@ def add_multi_part_job(job_data):
             f_finish = calculate_finish(finish_start, f_dur, job_data['night'], job_data['weekend'])
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": f_mach,
-                "sales_rep": job_data['sales_rep'],
-                "quantity": int(job_data['total_qty']), "ups": 1, "impressions": int(job_data['total_qty']),
-                "start_time": finish_start.isoformat(), "finish_time": f_finish.isoformat(),
-                "net_profit": float(profit_per_stage), "contract_value": float(val_per_stage),
-                "material_costs": 0.0, "overhead_rate": float(job_data['ovh_rate'])
+                "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']), "ups": 1, 
+                "impressions": int(job_data['total_qty']), "start_time": finish_start.isoformat(), 
+                "finish_time": f_finish.isoformat(), "net_profit": float(profit_per_stage), 
+                "contract_value": float(val_per_stage), "material_costs": 0.0, 
+                "overhead_rate": float(job_data['ovh_rate'])
             }).execute()
             finish_start = f_finish
     return tid
@@ -125,8 +116,9 @@ tab_dash, tab_plan, tab_control, tab_track = st.tabs(["📊 DASHBOARD", "📝 SI
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
-        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
-        df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
+        # FIXED: Using ISO8601 format for robust date parsing
+        df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
+        df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
         df['duration_hrs'] = (df['finish_time'] - df['start_time']).dt.total_seconds() / 3600
 
         m1, m2, m3, m4 = st.columns(4)
@@ -143,6 +135,7 @@ with tab_dash:
             with cols[i % 3]:
                 st.write(f"**{row['machine']}**")
                 st.progress(min(util/100, 1.0))
+    else: st.info("No active production found.")
 
 with tab_plan:
     st.subheader("📝 Multi-Component Production Planner")
@@ -192,7 +185,8 @@ with tab_plan:
     night = s2.toggle("🌙 Night Shift")
     wknd = s3.toggle("📅 Weekends")
     
-    if st.button("🚀 Commit Full Project", width="stretch"):
+    # FIXED: Reverted to use_container_width for buttons (standard behavior)
+    if st.button("🚀 Commit Full Project", use_container_width=True):
         if job_name and sales_rep:
             payload = {
                 "name": job_name, "sales_rep": sales_rep, "total_qty": cov_qty, "total_val": total_val,
@@ -211,19 +205,23 @@ with tab_plan:
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
-        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
-        df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
+        # FIXED: ISO8601 parsing for Gantt Chart
+        df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
+        df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
         fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
 with tab_track:
     st.markdown("### 🚛 Order Tracking")
     sid = st.text_input("Enter Tracking ID").upper().strip()
     if sid:
         df = get_db_jobs()
-        match = df[df['tracking_id'] == sid].sort_values('finish_time')
-        if not match.empty:
-            st.success(f"Project: {match['job_name'].iloc[0]}")
-            st.write(f"Estimated Completion: {match['finish_time'].max()}")
-            for _, row in match.iterrows():
-                st.write(f"- {row['machine']}: Ready by {pd.to_datetime(row['finish_time']).strftime('%b %d, %H:%M')}")
+        if not df.empty:
+            # FIXED: ISO8601 parsing for Tracking
+            df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
+            match = df[df['tracking_id'] == sid].sort_values('finish_time')
+            if not match.empty:
+                st.success(f"Project: {match['job_name'].iloc[0]}")
+                st.write(f"Estimated Completion: {match['finish_time'].max().strftime('%b %d, %I:%M %p')}")
+                for _, row in match.iterrows():
+                    st.write(f"- {row['machine']}: Ready by {row['finish_time'].strftime('%b %d, %H:%M')}")
