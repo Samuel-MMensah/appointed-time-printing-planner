@@ -149,7 +149,7 @@ def add_multi_part_job(job_data):
 # --- 5. UI LAYOUT ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
 
-# --- TAB 1: COMMAND CENTER (Updated Charts) ---
+# --- TAB 1: COMMAND CENTER ---
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
@@ -171,7 +171,6 @@ with tab_dash:
         
         with col_left:
             st.markdown('<p class="section-header">🥇 Top 5 Jobs by Revenue</p>', unsafe_allow_html=True)
-            # Group by job_name and sum contract_value, then take top 5
             top_jobs = df.groupby('job_name')['contract_value'].sum().sort_values(ascending=True).tail(5).reset_index()
             fig_top = px.bar(top_jobs, y='job_name', x='contract_value', orientation='h', 
                              text_auto='.2s', color='contract_value', color_continuous_scale='Blues')
@@ -184,8 +183,6 @@ with tab_dash:
             st.markdown('<p class="section-header">🍕 Revenue by Category</p>', unsafe_allow_html=True)
             cat_data = df.groupby('ups')['contract_value'].sum().reset_index()
             cat_data['Category'] = cat_data['ups'].map({1: 'Books/Manuals', 2: 'Skillets/Boxes'})
-            
-            # Clean donut chart with explicit labels and percentages
             fig_pie = px.pie(cat_data, values='contract_value', names='Category', hole=.5,
                              color_discrete_sequence=['#2563eb', '#93c5fd'])
             fig_pie.update_traces(textposition='outside', textinfo='percent+label')
@@ -258,7 +255,7 @@ with tab_plan:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 3: SHOP FLOOR CONTROL ---
+# --- TAB 3: SHOP FLOOR CONTROL (Updated with Collapse/Expand) ---
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
@@ -272,22 +269,17 @@ with tab_control:
         st.plotly_chart(fig, use_container_width=True)
         
         st.markdown('<p class="section-header">📋 Detailed Production Queue</p>', unsafe_allow_html=True)
+        
         for job_name, group in df.groupby('job_name'):
-            with st.container():
-                st.markdown(f"""
-                <div style="background: white; border-radius: 15px; padding: 20px; border: 1px solid #e2e8f0; margin-bottom: 15px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <h4 style="margin:0; color: #1e293b;">📦 {job_name.upper()}</h4>
-                        <span class="badge badge-running">In Production</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+            # Using st.expander to provide collapse/expand functionality
+            with st.expander(f"📦 {job_name.upper()} | Status: IN PRODUCTION", expanded=False):
                 display_df = group[['machine', 'impressions', 'start_time', 'finish_time']].copy()
                 display_df['start_time'] = display_df['start_time'].dt.strftime('%d %b, %H:%M')
                 display_df['finish_time'] = display_df['finish_time'].dt.strftime('%d %b, %H:%M')
+                
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
+                
                 col_actions = st.columns([6, 1])
-                if col_actions[1].button("🗑️ Scrap", key=f"del_{job_name}", use_container_width=True):
+                if col_actions[1].button("🗑️ Scrap Job", key=f"del_{job_name}", use_container_width=True):
                     supabase.table('jobs').delete().eq('job_name', job_name).execute()
                     st.rerun()
-                st.markdown("<br>", unsafe_allow_html=True)
