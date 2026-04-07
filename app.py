@@ -30,13 +30,13 @@ MACHINE_DATA = {
     'LAMINATION UNIT': {'rate': 2500},
 }
 
-# --- 3. ELITE CSS STYLING ---
+# --- 3. ENHANCED ELITE CSS STYLING ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     
-    .stApp { background-color: #fcfcfd; }
+    .stApp { background-color: #f8fafc; }
     
     /* Stats Cards */
     .metric-card {
@@ -50,24 +50,46 @@ st.markdown("""
     .metric-value { font-size: 28px; font-weight: 700; color: #1a202c; }
     .metric-label { font-size: 14px; color: #718096; text-transform: uppercase; letter-spacing: 1px; }
 
-    /* Production Cards */
-    .prod-card {
+    /* Production Planner Glassmorphism */
+    .planner-card {
         background: white;
-        border-left: 5px solid #2563eb;
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        padding: 2rem;
+        border-radius: 20px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+
+    /* Shop Floor Status Badges */
+    .badge {
+        padding: 4px 12px;
+        border-radius: 50px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    .badge-running { background-color: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+    .badge-waiting { background-color: #fef9c3; color: #854d0e; border: 1px solid #fef08a; }
+
+    /* Custom Headers */
+    .section-header {
+        font-size: 22px;
+        font-weight: 800;
+        color: #0f172a;
+        margin: 25px 0 15px 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
     }
     
-    /* Section Headers */
-    .section-header {
-        font-size: 20px;
-        font-weight: 700;
-        color: #1e293b;
-        margin-bottom: 20px;
-        border-bottom: 2px solid #e2e8f0;
-        padding-bottom: 8px;
+    /* Summary Panel */
+    .summary-box {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        color: white;
+        padding: 25px;
+        border-radius: 20px;
+        position: sticky;
+        top: 20px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -96,13 +118,12 @@ def add_multi_part_job(job_data):
         comp_start = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
         for machine in comp['machines']:
             dur = SETUP_HOURS + (comp['impressions'] / MACHINE_DATA[machine]['rate'])
-            # Note: calculate_finish logic remains standard
-            finish = comp_start + timedelta(hours=dur) # Simplified for UI focus
+            finish = comp_start + timedelta(hours=dur)
             
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": machine,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
-                "ups": int(job_data['type_id']), # Storing category type here
+                "ups": int(job_data['type_id']), 
                 "impressions": int(comp['impressions']), "start_time": comp_start.isoformat(), 
                 "finish_time": finish.isoformat(), "contract_value": float(val_per_stage),
                 "net_profit": 0, "material_costs": 0, "overhead_rate": 0
@@ -128,14 +149,13 @@ def add_multi_part_job(job_data):
 # --- 5. UI LAYOUT ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
 
-# --- TAB 1: COMMAND CENTER (Redesigned Dashboard) ---
+# --- TAB 1: COMMAND CENTER ---
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
         df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
         
-        # High-Level Metrics
         c1, c2, c3, c4 = st.columns(4)
         with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">Active Jobs</div><div class="metric-value">{df["job_name"].nunique()}</div></div>', unsafe_allow_html=True)
         with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">Pipeline Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
@@ -147,111 +167,122 @@ with tab_dash:
             st.markdown(f'<div class="metric-card"><div class="metric-label">Skillet Jobs</div><div class="metric-value">{skillets_count}</div></div>', unsafe_allow_html=True)
         
         st.markdown("<br>", unsafe_allow_html=True)
-        
         col_left, col_right = st.columns([2, 1])
         with col_left:
-            st.markdown('<p class="section-header">Machine Load Analysis</p>', unsafe_allow_html=True)
+            st.markdown('<p class="section-header">📊 Machine Load Analysis</p>', unsafe_allow_html=True)
             load = df.groupby('machine').size().reset_index(name='Queue')
             fig_load = px.bar(load, x='machine', y='Queue', color='Queue', color_continuous_scale='Blues')
-            fig_load.update_layout(showlegend=False, height=350, margin=dict(t=10, b=10, l=10, r=10))
+            fig_load.update_layout(showlegend=False, height=350, margin=dict(t=10, b=10, l=10, r=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig_load, use_container_width=True)
-            
         with col_right:
-            st.markdown('<p class="section-header">Revenue by Category</p>', unsafe_allow_html=True)
+            st.markdown('<p class="section-header">💰 Revenue by Category</p>', unsafe_allow_html=True)
             cat_data = df.groupby('ups')['contract_value'].sum().reset_index()
             cat_data['Category'] = cat_data['ups'].map({1: 'Books/Manuals', 2: 'Skillets/Flyers'})
             fig_pie = px.pie(cat_data, values='contract_value', names='Category', hole=.6, color_discrete_sequence=['#2563eb', '#60a5fa'])
             fig_pie.update_layout(height=350, margin=dict(t=10, b=10, l=10, r=10), showlegend=False)
             st.plotly_chart(fig_pie, use_container_width=True)
 
-# --- TAB 2: PRODUCTION PLANNER (Product Choice Integration) ---
+# --- TAB 2: PRODUCTION PLANNER (Improved UI) ---
 with tab_plan:
-    st.markdown('<p class="section-header">New Production Simulation</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-header">🛠️ Project Specification Architecture</p>', unsafe_allow_html=True)
     
-    with st.container():
-        st.markdown('<div class="component-card">', unsafe_allow_html=True)
+    col_input, col_summ = st.columns([2.2, 1])
+    
+    with col_input:
+        st.markdown('<div class="planner-card">', unsafe_allow_html=True)
+        st.markdown("##### 🟢 Step 1: Identity & Classification")
         c1, c2, c3 = st.columns([2, 1, 1])
-        job_name = c1.text_input("Project Name / Description", placeholder="e.g. 50,000 Pharma Skillets")
+        job_name = c1.text_input("Project Description", placeholder="Enter unique job name...")
         sales_rep = c2.selectbox("Account Manager", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
-        prod_cat = c3.selectbox("Product Category", ["📚 Book / Brochure", "📦 Skillet / Box", "📄 Flyer / Leaflet"])
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    col_cfg, col_summ = st.columns([2, 1])
-    
-    with col_cfg:
-        # Step-based entry
-        st.markdown("#### 1. Material & Quantity")
-        cc1, cc2, cc3 = st.columns(3)
-        order_qty = cc1.number_input("Total Order Quantity", value=1000, step=500)
-        total_val = cc2.number_input("Contract Value (GH₵)", value=5000.0)
+        prod_cat = c3.selectbox("Work Type", ["📚 Book / Brochure", "📦 Skillet / Box", "📄 Flyer / Leaflet"])
         
-        # Logic change based on category
+        st.divider()
+        st.markdown("##### 🔵 Step 2: Dimensional Specs")
+        cc1, cc2, cc3 = st.columns(3)
+        order_qty = cc1.number_input("Total Units", value=1000, step=500)
+        total_val = cc2.number_input("Project Value (GH₵)", value=5000.0)
+        
         if "Book" in prod_cat:
             type_id = 1
-            ups = cc3.number_input("Ups per Sheet (Cover)", value=2)
-            pages = st.number_input("Total Text Pages", value=64)
-            sig_size = st.selectbox("Signature Size", [8, 16, 32], index=1)
+            ups = cc3.number_input("Cover Ups", value=2)
+            p1, p2 = st.columns(2)
+            pages = p1.number_input("Page Count", value=64)
+            sig_size = p2.selectbox("Signature Breakdown", [8, 16, 32], index=1)
             text_impressions = math.ceil(pages / sig_size) * order_qty
         else:
             type_id = 2
-            ups = cc3.number_input("Ups per Sheet", value=12)
-            text_impressions = 0 # Not used for skillets
+            ups = cc3.number_input("Items Per Sheet", value=12)
+            text_impressions = 0
 
-        st.markdown("#### 2. Workflow Routing")
+        st.divider()
+        st.markdown("##### 🟣 Step 3: Workflow Routing")
         if "Book" in prod_cat:
             r1, r2, r3 = st.columns(3)
-            cov_route = r1.multiselect("Cover Press", list(MACHINE_DATA.keys()))
-            txt_route = r2.multiselect("Text Press", list(MACHINE_DATA.keys()))
-            fin_route = r3.multiselect("Finishing/Binding", list(MACHINE_DATA.keys()))
+            cov_route = r1.multiselect("Press: Cover", list(MACHINE_DATA.keys()))
+            txt_route = r2.multiselect("Press: Text", list(MACHINE_DATA.keys()))
+            fin_route = r3.multiselect("Binding Line", list(MACHINE_DATA.keys()))
             components = [
                 {"name": "Cover", "impressions": order_qty/ups, "machines": cov_route},
                 {"name": "Text", "impressions": text_impressions, "machines": txt_route}
             ]
         else:
             r1, r2 = st.columns(2)
-            print_route = r1.multiselect("Printing Press", list(MACHINE_DATA.keys()))
-            fin_route = r2.multiselect("Finishing (Diecut/Glue)", list(MACHINE_DATA.keys()))
+            print_route = r1.multiselect("Printing Line", list(MACHINE_DATA.keys()))
+            fin_route = r2.multiselect("Finishing Line", list(MACHINE_DATA.keys()))
             components = [{"name": "Body", "impressions": order_qty/ups, "machines": print_route}]
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with col_summ:
-        st.markdown('<div class="profit-panel">', unsafe_allow_html=True)
-        st.markdown("#### Scheduling")
-        start_date = st.date_input("Target Start Date")
-        st.write(f"**Category:** {prod_cat}")
-        st.write(f"**Est. Press Run:** {int(order_qty/ups):,} impressions")
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if st.button("🚀 Push to Shop Floor", use_container_width=True):
+        st.markdown('<div class="summary-box">', unsafe_allow_html=True)
+        st.markdown("### 📋 Run Estimate")
+        st.markdown(f"**Target Start:** {datetime.now().strftime('%Y-%m-%d')}")
+        st.markdown(f"**Est. Impressions:** {int(order_qty/ups + (text_impressions if 'Book' in prod_cat else 0)):,}")
+        st.markdown(f"**Stages:** {len(fin_route) + (len(cov_route)+len(txt_route) if 'Book' in prod_cat else len(print_route))}")
+        st.divider()
+        start_date = st.date_input("Deployment Date")
+        if st.button("🚀 Push to Production", use_container_width=True):
             if job_name:
-                payload = {
-                    "name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, "total_val": total_val,
-                    "start_date": start_date, "type_id": type_id, "night": False, "weekend": False,
-                    "components": components, "finishing_machines": fin_route
-                }
+                payload = {"name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, "total_val": total_val, "start_date": start_date, "type_id": type_id, "components": components, "finishing_machines": fin_route}
                 add_multi_part_job(payload)
-                st.balloons()
+                st.toast("Job Dispatched Successfully!", icon="🏭")
                 st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 3: SHOP FLOOR CONTROL ---
+# --- TAB 3: SHOP FLOOR CONTROL (Enhanced UI) ---
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
         df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
         
-        # Gantt
+        st.markdown('<p class="section-header">⌛ Real-Time Timeline</p>', unsafe_allow_html=True)
         fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
-                          template="plotly_white", color_discrete_sequence=px.colors.qualitative.Prism)
-        fig.update_layout(height=400, margin=dict(t=0, b=0))
+                          template="plotly_white", color_discrete_sequence=px.colors.qualitative.Bold)
+        fig.update_layout(height=400, margin=dict(t=0, b=0), paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         
-        st.markdown('<p class="section-header">Live Production Queue</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-header">📋 Detailed Production Queue</p>', unsafe_allow_html=True)
+        
         for job_name, group in df.groupby('job_name'):
-            with st.expander(f"📦 {job_name.upper()} | Sales: {group['sales_rep'].iloc[0]}"):
-                st.table(group[['machine', 'impressions', 'start_time', 'finish_time']].assign(
-                    start_time=lambda x: x['start_time'].dt.strftime('%d %b, %H:%M'),
-                    finish_time=lambda x: x['finish_time'].dt.strftime('%d %b, %H:%M')
-                ))
-                if st.button("Delete Job", key=f"del_{job_name}"):
+            with st.container():
+                st.markdown(f"""
+                <div style="background: white; border-radius: 15px; padding: 20px; border: 1px solid #e2e8f0; margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h4 style="margin:0; color: #1e293b;">📦 {job_name.upper()}</h4>
+                        <span class="badge badge-running">In Production</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Modern Table Presentation
+                display_df = group[['machine', 'impressions', 'start_time', 'finish_time']].copy()
+                display_df['start_time'] = display_df['start_time'].dt.strftime('%d %b, %H:%M')
+                display_df['finish_time'] = display_df['finish_time'].dt.strftime('%d %b, %H:%M')
+                
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                
+                col_actions = st.columns([6, 1])
+                if col_actions[1].button("🗑️ Scrap", key=f"del_{job_name}", use_container_width=True):
                     supabase.table('jobs').delete().eq('job_name', job_name).execute()
                     st.rerun()
+                st.markdown("<br>", unsafe_allow_html=True)
