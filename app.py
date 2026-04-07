@@ -12,37 +12,25 @@ st.set_page_config(page_title="Appointed Time | Elite ERP", layout="wide", page_
 
 # --- 2. GLOBAL SETUP ---
 CURRENCY = "GH₵"
-
-# Updated to 1.5 hours as per the standard "jogging and setting up" 
-# time mentioned for most machines in your document[cite: 259, 291, 478].
 SETUP_HOURS = 1.5  
-DAILY_CAPACITY_HOURS = 8.0  # Based on the "8 man hours" specified[cite: 256, 304, 338].
+DAILY_CAPACITY_HOURS = 8.0 
 
 MACHINE_DATA = {
-    # Printing Units [cite: 254, 269, 285, 301, 317]
     'SM102-CX FOUR COLOUR': {'rate': 8000},
     'SM102-P FIVE COLOUR': {'rate': 7500},
     'SM 52': {'rate': 7000},
     'GTO 52 SEMI-AUTO-2 COLOUR': {'rate': 4500},
-    'GTO 52 MANUAL-2 COLOUR': {'rate': 4000}, # Note: Document specifies 2hr setup for this [cite: 323]
-    
-    # Folding & Binding Units [cite: 335, 353, 416, 451]
+    'GTO 52 MANUAL-2 COLOUR': {'rate': 4000},
     'FOLDING UNIT (CONTINUOUS)': {'rate': 8000},
     'MBO-B30E (SINGLE FOLD)': {'rate': 16000},
     'PERFECT BINDING': {'rate': 500},
     'SADDLE STITCHER': {'rate': 1000},
-    
-    # Cutting & Trimming Units [cite: 373, 387, 401]
     'POLAR CUTTER (BOOKS)': {'rate': 2000},
     'POLAR CUTTER (SHEETS)': {'rate': 50000},
     '3 WAY TRIMMER': {'rate': 5000},
-    
-    # Finishing & Packaging Units [cite: 434, 472, 490]
     'LAMINATION UNIT': {'rate': 2500},
     'DIE CUTTER': {'rate': 3000},
     'FOLDER GLUER': {'rate': 12000},
-    
-    # Digital (Kept from original code as they weren't in the PDF)
     'CANON DIGITAL C10000': {'rate': 6000},
     'CANON DIGITAL C800': {'rate': 4000},
 }
@@ -52,62 +40,13 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    
     .stApp { background-color: #f8fafc; }
-    
-    /* Stats Cards */
-    .metric-card {
-        background: white;
-        padding: 24px;
-        border-radius: 16px;
-        border: 1px solid #edf2f7;
-        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
-        text-align: center;
-    }
+    .metric-card { background: white; padding: 24px; border-radius: 16px; border: 1px solid #edf2f7; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); text-align: center; }
     .metric-value { font-size: 28px; font-weight: 700; color: #1a202c; }
     .metric-label { font-size: 14px; color: #718096; text-transform: uppercase; letter-spacing: 1px; }
-
-    /* Production Planner Glassmorphism */
-    .planner-card {
-        background: white;
-        padding: 2rem;
-        border-radius: 20px;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-        margin-bottom: 20px;
-    }
-
-    /* Shop Floor Status Badges */
-    .badge {
-        padding: 4px 12px;
-        border-radius: 50px;
-        font-size: 12px;
-        font-weight: 600;
-        text-transform: uppercase;
-    }
-    .badge-running { background-color: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
-    .badge-waiting { background-color: #fef9c3; color: #854d0e; border: 1px solid #fef08a; }
-
-    /* Custom Headers */
-    .section-header {
-        font-size: 22px;
-        font-weight: 800;
-        color: #0f172a;
-        margin: 25px 0 15px 0;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    /* Summary Panel */
-    .summary-box {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        color: white;
-        padding: 25px;
-        border-radius: 20px;
-        position: sticky;
-        top: 20px;
-    }
+    .planner-card { background: white; padding: 2rem; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    .section-header { font-size: 22px; font-weight: 800; color: #0f172a; margin: 25px 0 15px 0; display: flex; align-items: center; gap: 10px; }
+    .summary-box { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); color: white; padding: 25px; border-radius: 20px; position: sticky; top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -119,37 +58,34 @@ def init_supabase():
 supabase: Client = init_supabase()
 
 # --- 4. DATA ENGINE ---
+def get_db_jobs():
+    """Restored function to fetch jobs from Supabase."""
+    if not supabase: return pd.DataFrame()
+    res = supabase.table('jobs').select("*").execute()
+    return pd.DataFrame(res.data)
+
 def calculate_production_time(start_dt, impressions, machine_rate):
     """Calculates finish time while strictly adhering to 8am-5pm work hours."""
     current_time = start_dt
     remaining_imps = impressions
-    
-    # Add initial setup time
     current_time += timedelta(hours=SETUP_HOURS)
     
     while remaining_imps > 0:
-        # Define the end of the current workday (5 PM)
         workday_end = current_time.replace(hour=17, minute=0, second=0, microsecond=0)
-        
-        # If we are already past 5pm, move to 8am next day
         if current_time >= workday_end:
             current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
             workday_end = current_time.replace(hour=17, minute=0)
             
-        # Capacity remaining in the current day (in hours)
         hours_left_today = (workday_end - current_time).total_seconds() / 3600
         imps_possible_today = hours_left_today * machine_rate
         
         if remaining_imps <= imps_possible_today:
-            # Job finishes today
             duration_hours = remaining_imps / machine_rate
             current_time += timedelta(hours=duration_hours)
             remaining_imps = 0
         else:
-            # Use up today and move to tomorrow morning
             remaining_imps -= imps_possible_today
             current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
-            
     return current_time
 
 def add_multi_part_job(job_data):
@@ -159,17 +95,14 @@ def add_multi_part_job(job_data):
 
     # 1. PRINTING STAGES
     printing_start_time = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
-    # Ensure start is within working hours
     if printing_start_time.hour < 8: printing_start_time = printing_start_time.replace(hour=8)
     if printing_start_time.hour >= 17: printing_start_time = (printing_start_time + timedelta(days=1)).replace(hour=8)
 
     for comp in job_data['components']:
         if not comp['machines']: continue
         current_stage_start = printing_start_time
-        
         for machine in comp['machines']:
             finish_time = calculate_production_time(current_stage_start, comp['impressions'], MACHINE_DATA[machine]['rate'])
-            
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": machine,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
@@ -179,23 +112,18 @@ def add_multi_part_job(job_data):
             }).execute()
             current_stage_start = finish_time
 
-    # 2. FINISHING STAGES (Die Cutting, Gluing, etc.)
+    # 2. FINISHING STAGES (Die Cutter starts 24hrs after print starts, Gluer 4hrs later)
     if job_data['finishing_machines']:
-        # Rule: Finishing starts 24 hours after Printing START (Drying buffer)
-        finish_start = printing_start_time + timedelta(days=1)
-        
+        finish_start_anchor = printing_start_time + timedelta(days=1)
         for i, f_mach in enumerate(job_data['finishing_machines']):
-            # Rule: Subsequent finishing stages start 4 hours after the previous finishing stage starts
-            stage_offset_start = finish_start + timedelta(hours=(i * 4))
+            stage_offset_start = finish_start_anchor + timedelta(hours=(i * 4))
             
-            # Ensure staggered start is within working hours
             if stage_offset_start.hour >= 17:
                 stage_offset_start = (stage_offset_start + timedelta(days=1)).replace(hour=8)
             elif stage_offset_start.hour < 8:
                 stage_offset_start = stage_offset_start.replace(hour=8)
 
             f_finish = calculate_production_time(stage_offset_start, job_data['total_qty'], MACHINE_DATA[f_mach]['rate'])
-            
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": f_mach,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
@@ -203,12 +131,12 @@ def add_multi_part_job(job_data):
                 "start_time": stage_offset_start.isoformat(), "finish_time": f_finish.isoformat(),
                 "contract_value": float(val_per_stage)
             }).execute()
-            
     return tid
 
-# --- 5. UI LAYOUT ---
+# --- 5. UI LAYOUT (Rest of your tabs...) ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
 
+# (The rest of your UI code for tab_dash, tab_plan, and tab_control follows here...)
 # --- TAB 1: COMMAND CENTER ---
 with tab_dash:
     df = get_db_jobs()
@@ -235,8 +163,8 @@ with tab_dash:
             fig_top = px.bar(top_jobs, y='job_name', x='contract_value', orientation='h', 
                              text_auto='.2s', color='contract_value', color_continuous_scale='Blues')
             fig_top.update_layout(showlegend=False, height=400, margin=dict(t=10, b=10, l=10, r=10), 
-                                 xaxis_title="Revenue (GH₵)", yaxis_title=None,
-                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                                  xaxis_title="Revenue (GH₵)", yaxis_title=None,
+                                  paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig_top, use_container_width=True)
 
         with col_right:
@@ -247,7 +175,7 @@ with tab_dash:
                              color_discrete_sequence=['#2563eb', '#93c5fd'])
             fig_pie.update_traces(textposition='outside', textinfo='percent+label')
             fig_pie.update_layout(height=400, margin=dict(t=30, b=30, l=30, r=30), 
-                                 showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
+                                  showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig_pie, use_container_width=True)
 
 # --- TAB 2: PRODUCTION PLANNER ---
@@ -315,7 +243,7 @@ with tab_plan:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 3: SHOP FLOOR CONTROL (Updated with Collapse/Expand) ---
+# --- TAB 3: SHOP FLOOR CONTROL ---
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
@@ -331,12 +259,10 @@ with tab_control:
         st.markdown('<p class="section-header">📋 Detailed Production Queue</p>', unsafe_allow_html=True)
         
         for job_name, group in df.groupby('job_name'):
-            # Using st.expander to provide collapse/expand functionality
             with st.expander(f"📦 {job_name.upper()} | Status: IN PRODUCTION", expanded=False):
                 display_df = group[['machine', 'impressions', 'start_time', 'finish_time']].copy()
                 display_df['start_time'] = display_df['start_time'].dt.strftime('%d %b, %H:%M')
                 display_df['finish_time'] = display_df['finish_time'].dt.strftime('%d %b, %H:%M')
-                
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
                 
                 col_actions = st.columns([6, 1])
