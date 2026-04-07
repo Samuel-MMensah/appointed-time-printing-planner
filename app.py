@@ -12,22 +12,39 @@ st.set_page_config(page_title="Appointed Time | Elite ERP", layout="wide", page_
 
 # --- 2. GLOBAL SETUP ---
 CURRENCY = "GH₵"
-SETUP_HOURS = 2.0  
-DAILY_CAPACITY_HOURS = 9.0  
+
+# Updated to 1.5 hours as per the standard "jogging and setting up" 
+# time mentioned for most machines in your document[cite: 259, 291, 478].
+SETUP_HOURS = 1.5  
+DAILY_CAPACITY_HOURS = 8.0  # Based on the "8 man hours" specified[cite: 256, 304, 338].
 
 MACHINE_DATA = {
+    # Printing Units [cite: 254, 269, 285, 301, 317]
+    'SM102-CX FOUR COLOUR': {'rate': 8000},
+    'SM102-P FIVE COLOUR': {'rate': 7500},
+    'SM 52': {'rate': 7000},
+    'GTO 52 SEMI-AUTO-2 COLOUR': {'rate': 4500},
+    'GTO 52 MANUAL-2 COLOUR': {'rate': 4000}, # Note: Document specifies 2hr setup for this [cite: 323]
+    
+    # Folding & Binding Units [cite: 335, 353, 416, 451]
+    'FOLDING UNIT (CONTINUOUS)': {'rate': 8000},
+    'MBO-B30E (SINGLE FOLD)': {'rate': 16000},
+    'PERFECT BINDING': {'rate': 500},
+    'SADDLE STITCHER': {'rate': 1000},
+    
+    # Cutting & Trimming Units [cite: 373, 387, 401]
+    'POLAR CUTTER (BOOKS)': {'rate': 2000},
+    'POLAR CUTTER (SHEETS)': {'rate': 50000},
+    '3 WAY TRIMMER': {'rate': 5000},
+    
+    # Finishing & Packaging Units [cite: 434, 472, 490]
+    'LAMINATION UNIT': {'rate': 2500},
+    'DIE CUTTER': {'rate': 3000},
+    'FOLDER GLUER': {'rate': 12000},
+    
+    # Digital (Kept from original code as they weren't in the PDF)
     'CANON DIGITAL C10000': {'rate': 6000},
     'CANON DIGITAL C800': {'rate': 4000},
-    'SM102-CX FOUR COLOUR': {'rate': 8000}, 
-    'SM102-P FIVE COLOUR': {'rate': 7500},
-    'SM 52': {'rate': 7000}, 
-    'GTO 52 SEMI-AUTO-2 COLOUR': {'rate': 4500},
-    'GTO 52 MANUAL-2 COLOUR': {'rate': 4000}, 
-    'FOLDING UNIT': {'rate': 8000},
-    'POLAR CUTTER': {'rate': 20000}, 
-    'PERFECT BINDING': {'rate': 500}, 
-    'SADDLE STITCHER': {'rate': 1000}, 
-    'LAMINATION UNIT': {'rate': 2500},
 }
 
 # --- 3. ENHANCED ELITE CSS STYLING ---
