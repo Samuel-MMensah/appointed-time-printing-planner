@@ -149,7 +149,7 @@ def add_multi_part_job(job_data):
 # --- 5. UI LAYOUT ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
 
-# --- TAB 1: COMMAND CENTER ---
+# --- TAB 1: COMMAND CENTER (Updated Charts) ---
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
@@ -167,25 +167,35 @@ with tab_dash:
             st.markdown(f'<div class="metric-card"><div class="metric-label">Skillet Jobs</div><div class="metric-value">{skillets_count}</div></div>', unsafe_allow_html=True)
         
         st.markdown("<br>", unsafe_allow_html=True)
-        col_left, col_right = st.columns([2, 1])
+        col_left, col_right = st.columns([1.5, 1])
+        
         with col_left:
-            st.markdown('<p class="section-header">📊 Machine Load Analysis</p>', unsafe_allow_html=True)
-            load = df.groupby('machine').size().reset_index(name='Queue')
-            fig_load = px.bar(load, x='machine', y='Queue', color='Queue', color_continuous_scale='Blues')
-            fig_load.update_layout(showlegend=False, height=350, margin=dict(t=10, b=10, l=10, r=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_load, use_container_width=True)
+            st.markdown('<p class="section-header">🥇 Top 5 Jobs by Revenue</p>', unsafe_allow_html=True)
+            # Group by job_name and sum contract_value, then take top 5
+            top_jobs = df.groupby('job_name')['contract_value'].sum().sort_values(ascending=True).tail(5).reset_index()
+            fig_top = px.bar(top_jobs, y='job_name', x='contract_value', orientation='h', 
+                             text_auto='.2s', color='contract_value', color_continuous_scale='Blues')
+            fig_top.update_layout(showlegend=False, height=400, margin=dict(t=10, b=10, l=10, r=10), 
+                                 xaxis_title="Revenue (GH₵)", yaxis_title=None,
+                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig_top, use_container_width=True)
+
         with col_right:
-            st.markdown('<p class="section-header">💰 Revenue by Category</p>', unsafe_allow_html=True)
+            st.markdown('<p class="section-header">🍕 Revenue by Category</p>', unsafe_allow_html=True)
             cat_data = df.groupby('ups')['contract_value'].sum().reset_index()
-            cat_data['Category'] = cat_data['ups'].map({1: 'Books/Manuals', 2: 'Skillets/Flyers'})
-            fig_pie = px.pie(cat_data, values='contract_value', names='Category', hole=.6, color_discrete_sequence=['#2563eb', '#60a5fa'])
-            fig_pie.update_layout(height=350, margin=dict(t=10, b=10, l=10, r=10), showlegend=False)
+            cat_data['Category'] = cat_data['ups'].map({1: 'Books/Manuals', 2: 'Skillets/Boxes'})
+            
+            # Clean donut chart with explicit labels and percentages
+            fig_pie = px.pie(cat_data, values='contract_value', names='Category', hole=.5,
+                             color_discrete_sequence=['#2563eb', '#93c5fd'])
+            fig_pie.update_traces(textposition='outside', textinfo='percent+label')
+            fig_pie.update_layout(height=400, margin=dict(t=30, b=30, l=30, r=30), 
+                                 showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig_pie, use_container_width=True)
 
-# --- TAB 2: PRODUCTION PLANNER (Improved UI) ---
+# --- TAB 2: PRODUCTION PLANNER ---
 with tab_plan:
     st.markdown('<p class="section-header">🛠️ Project Specification Architecture</p>', unsafe_allow_html=True)
-    
     col_input, col_summ = st.columns([2.2, 1])
     
     with col_input:
@@ -248,7 +258,7 @@ with tab_plan:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 3: SHOP FLOOR CONTROL (Enhanced UI) ---
+# --- TAB 3: SHOP FLOOR CONTROL ---
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
@@ -262,7 +272,6 @@ with tab_control:
         st.plotly_chart(fig, use_container_width=True)
         
         st.markdown('<p class="section-header">📋 Detailed Production Queue</p>', unsafe_allow_html=True)
-        
         for job_name, group in df.groupby('job_name'):
             with st.container():
                 st.markdown(f"""
@@ -273,14 +282,10 @@ with tab_control:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-                # Modern Table Presentation
                 display_df = group[['machine', 'impressions', 'start_time', 'finish_time']].copy()
                 display_df['start_time'] = display_df['start_time'].dt.strftime('%d %b, %H:%M')
                 display_df['finish_time'] = display_df['finish_time'].dt.strftime('%d %b, %H:%M')
-                
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
-                
                 col_actions = st.columns([6, 1])
                 if col_actions[1].button("🗑️ Scrap", key=f"del_{job_name}", use_container_width=True):
                     supabase.table('jobs').delete().eq('job_name', job_name).execute()
