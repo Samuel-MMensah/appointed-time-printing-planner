@@ -119,48 +119,91 @@ def init_supabase():
 supabase: Client = init_supabase()
 
 # --- 4. DATA ENGINE ---
-def get_db_jobs():
-    if not supabase: return pd.DataFrame()
-    res = supabase.table('jobs').select("*").execute()
-    return pd.DataFrame(res.data)
+def calculate_production_time(start_dt, impressions, machine_rate):
+    """Calculates finish time while strictly adhering to 8am-5pm work hours."""
+    current_time = start_dt
+    remaining_imps = impressions
+    
+    # Add initial setup time
+    current_time += timedelta(hours=SETUP_HOURS)
+    
+    while remaining_imps > 0:
+        # Define the end of the current workday (5 PM)
+        workday_end = current_time.replace(hour=17, minute=0, second=0, microsecond=0)
+        
+        # If we are already past 5pm, move to 8am next day
+        if current_time >= workday_end:
+            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
+            workday_end = current_time.replace(hour=17, minute=0)
+            
+        # Capacity remaining in the current day (in hours)
+        hours_left_today = (workday_end - current_time).total_seconds() / 3600
+        imps_possible_today = hours_left_today * machine_rate
+        
+        if remaining_imps <= imps_possible_today:
+            # Job finishes today
+            duration_hours = remaining_imps / machine_rate
+            current_time += timedelta(hours=duration_hours)
+            remaining_imps = 0
+        else:
+            # Use up today and move to tomorrow morning
+            remaining_imps -= imps_possible_today
+            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
+            
+    return current_time
 
 def add_multi_part_job(job_data):
     tid = f"JOB-{random.randint(1000, 9999)}"
-    comp_finish_times = []
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
 
+    # 1. PRINTING STAGES
+    printing_start_time = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
+    # Ensure start is within working hours
+    if printing_start_time.hour < 8: printing_start_time = printing_start_time.replace(hour=8)
+    if printing_start_time.hour >= 17: printing_start_time = (printing_start_time + timedelta(days=1)).replace(hour=8)
+
     for comp in job_data['components']:
         if not comp['machines']: continue
-        comp_start = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
+        current_stage_start = printing_start_time
+        
         for machine in comp['machines']:
-            dur = SETUP_HOURS + (comp['impressions'] / MACHINE_DATA[machine]['rate'])
-            finish = comp_start + timedelta(hours=dur)
+            finish_time = calculate_production_time(current_stage_start, comp['impressions'], MACHINE_DATA[machine]['rate'])
             
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": machine,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
-                "ups": int(job_data['type_id']), 
-                "impressions": int(comp['impressions']), "start_time": comp_start.isoformat(), 
-                "finish_time": finish.isoformat(), "contract_value": float(val_per_stage),
-                "net_profit": 0, "material_costs": 0, "overhead_rate": 0
+                "ups": int(job_data['type_id']), "impressions": int(comp['impressions']), 
+                "start_time": current_stage_start.isoformat(), "finish_time": finish_time.isoformat(), 
+                "contract_value": float(val_per_stage)
             }).execute()
-            comp_start = finish
-        comp_finish_times.append(comp_start)
+            current_stage_start = finish_time
 
+    # 2. FINISHING STAGES (Die Cutting, Gluing, etc.)
     if job_data['finishing_machines']:
-        finish_start = max(comp_finish_times)
-        for f_mach in job_data['finishing_machines']:
-            f_dur = SETUP_HOURS + (job_data['total_qty'] / MACHINE_DATA[f_mach]['rate'])
-            f_finish = finish_start + timedelta(hours=f_dur)
+        # Rule: Finishing starts 24 hours after Printing START (Drying buffer)
+        finish_start = printing_start_time + timedelta(days=1)
+        
+        for i, f_mach in enumerate(job_data['finishing_machines']):
+            # Rule: Subsequent finishing stages start 4 hours after the previous finishing stage starts
+            stage_offset_start = finish_start + timedelta(hours=(i * 4))
+            
+            # Ensure staggered start is within working hours
+            if stage_offset_start.hour >= 17:
+                stage_offset_start = (stage_offset_start + timedelta(days=1)).replace(hour=8)
+            elif stage_offset_start.hour < 8:
+                stage_offset_start = stage_offset_start.replace(hour=8)
+
+            f_finish = calculate_production_time(stage_offset_start, job_data['total_qty'], MACHINE_DATA[f_mach]['rate'])
+            
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": f_mach,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
                 "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
-                "start_time": finish_start.isoformat(), "finish_time": f_finish.isoformat(),
-                "contract_value": float(val_per_stage), "net_profit": 0, "material_costs": 0, "overhead_rate": 0
+                "start_time": stage_offset_start.isoformat(), "finish_time": f_finish.isoformat(),
+                "contract_value": float(val_per_stage)
             }).execute()
-            finish_start = f_finish
+            
     return tid
 
 # --- 5. UI LAYOUT ---
