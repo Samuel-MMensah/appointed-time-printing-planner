@@ -107,12 +107,15 @@ def calculate_production_time(start_dt, impressions, machine_rate):
     current_time += timedelta(hours=SETUP_HOURS)
     
     while remaining_imps > 0:
-        workday_end = current_time.replace(hour=17, minute=0, second=0, microsecond=0)
-        if current_time >= workday_end:
-            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
-            workday_end = current_time.replace(hour=17, minute=0)
-            
+        # Normalize to work day hours (8 AM - 5 PM)
+        if current_time.hour < 8:
+            current_time = current_time.replace(hour=8, minute=0, second=0)
+        elif current_time.hour >= 17:
+            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0, second=0)
+
+        workday_end = current_time.replace(hour=17, minute=0, second=0)
         hours_left_today = (workday_end - current_time).total_seconds() / 3600
+        
         imps_possible_today = hours_left_today * machine_rate
         
         if remaining_imps <= imps_possible_today:
@@ -129,39 +132,47 @@ def add_multi_part_job(job_data):
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
 
-    printing_start_time = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
-    if printing_start_time.hour < 8: printing_start_time = printing_start_time.replace(hour=8)
-    if printing_start_time.hour >= 17: printing_start_time = (printing_start_time + timedelta(days=1)).replace(hour=8)
+    # Start Anchor
+    base_start = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
+    if base_start.hour < 8: base_start = base_start.replace(hour=8, minute=0)
+    if base_start.hour >= 17: base_start = (base_start + timedelta(days=1)).replace(hour=8, minute=0)
 
+    # Stage 1: Printing (Sequential)
+    printing_finish_final = base_start
     for comp in job_data['components']:
-        if not comp['machines']: continue
-        current_stage_start = printing_start_time
+        current_comp_start = base_start
         for machine in comp['machines']:
-            finish_time = calculate_production_time(current_stage_start, comp['impressions'], MACHINE_DATA[machine]['rate'])
+            finish_time = calculate_production_time(current_comp_start, comp['impressions'], MACHINE_DATA[machine]['rate'])
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": machine,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
                 "ups": int(job_data['type_id']), "impressions": int(comp['impressions']), 
-                "start_time": current_stage_start.isoformat(), "finish_time": finish_time.isoformat(), 
+                "start_time": current_comp_start.isoformat(), "finish_time": finish_time.isoformat(), 
                 "contract_value": float(val_per_stage)
             }).execute()
-            current_stage_start = finish_time
+            current_comp_start = finish_time
+            printing_finish_final = max(printing_finish_final, finish_time)
 
+    # Stage 2: Industry Overlap Finishing
     if job_data['finishing_machines']:
-        finish_start_anchor = printing_start_time + timedelta(days=1)
         for i, f_mach in enumerate(job_data['finishing_machines']):
-            stage_offset_start = finish_start_anchor + timedelta(hours=(i * 4))
-            if stage_offset_start.hour >= 17:
-                stage_offset_start = (stage_offset_start + timedelta(days=1)).replace(hour=8)
-            elif stage_offset_start.hour < 8:
-                stage_offset_start = stage_offset_start.replace(hour=8)
+            # Industry logic: Die Cutter (index 0) starts 24hrs after print. Folder Gluer (index 1) starts 2hrs after Die Cutter.
+            if i == 0:
+                f_start = base_start + timedelta(days=1) # 24hr offset
+            else:
+                f_start = base_start + timedelta(days=1, hours=i * 2) # Staggered 2hr after previous
+            
+            # Ensure it starts within work hours
+            if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8)
+            elif f_start.hour < 8: f_start = f_start.replace(hour=8)
 
-            f_finish = calculate_production_time(stage_offset_start, job_data['total_qty'], MACHINE_DATA[f_mach]['rate'])
+            f_finish = calculate_production_time(f_start, job_data['total_qty'], MACHINE_DATA[f_mach]['rate'])
+            
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": f_mach,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
                 "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
-                "start_time": stage_offset_start.isoformat(), "finish_time": f_finish.isoformat(),
+                "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
                 "contract_value": float(val_per_stage)
             }).execute()
     return tid
@@ -266,7 +277,6 @@ with tab_plan:
         st.markdown("### 📋 Run Blueprint")
         st.markdown("---")
         
-        # Real-time data points
         total_est_imps = int(order_qty/ups + (text_impressions if 'Book' in prod_cat else 0))
         num_stages = len(fin_route) + (len(cov_route)+len(txt_route) if 'Book' in prod_cat else len(print_route))
         
@@ -299,7 +309,7 @@ with tab_control:
         st.markdown('<p class="section-header">⌛ Real-Time Timeline</p>', unsafe_allow_html=True)
         fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
                           template="plotly_white", color_discrete_sequence=px.colors.qualitative.Bold)
-        fig.update_layout(height=400, margin=dict(t=0, b=0), paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
+        fig.update_layout(height=450, margin=dict(t=0, b=0), paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         
         st.markdown('<p class="section-header">📋 Detailed Production Queue</p>', unsafe_allow_html=True)
