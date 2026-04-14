@@ -8,7 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Appointed Time | Elite ERP", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Appointed Time Printing | Elite ERP", layout="wide", page_icon="🏢")
 
 # --- 2. GLOBAL SETUP ---
 CURRENCY = "GH₵"
