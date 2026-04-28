@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pd
+import pd
 from datetime import datetime, timedelta, timezone
 import math
 import random
@@ -14,7 +14,6 @@ CURRENCY = "GH₵"
 SETUP_HOURS = 1.5  
 DAILY_CAPACITY_HOURS = 8.0 
 
-# Fixed: Included missing rates for DIE CUTTER and FOLDER GLUER
 MACHINE_DATA = {
     'SM102-CX FOUR COLOUR': {'rate': 8000},
     'SM102-P FIVE COLOUR': {'rate': 7500},
@@ -29,24 +28,57 @@ MACHINE_DATA = {
     'POLAR CUTTER (SHEETS)': {'rate': 50000},
     '3 WAY TRIMMER': {'rate': 5000},
     'LAMINATION UNIT': {'rate': 2500},
-    'DIE CUTTER': {'rate': 3000},  # Fixed missing rate
-    'FOLDER GLUER': {'rate': 12000}, # Fixed missing rate
+    'DIE CUTTER': {'rate': 3000},  
+    'FOLDER GLUER': {'rate': 12000}, 
     'CANON DIGITAL C10000': {'rate': 6000},
     'CANON DIGITAL C800': {'rate': 4000},
 }
 
-# --- 3. UI STYLING ---
+# --- 3. ENHANCED EXECUTIVE UI STYLING ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .stApp { background-color: #f8fafc; }
-    .metric-card { background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; text-align: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-    .metric-value { font-size: 24px; font-weight: 700; color: #1e293b; }
-    .metric-label { font-size: 12px; color: #64748b; text-transform: uppercase; }
-    .planner-card { background: white; padding: 25px; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
-    .summary-box { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 25px; border-radius: 20px; position: sticky; top: 20px; }
-    .section-header { font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 15px; border-left: 4px solid #2563eb; padding-left: 10px; }
+    
+    /* Main Background */
+    .stApp { background-color: #f1f5f9; }
+    
+    /* Professional KPI Cards */
+    .metric-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border-bottom: 4px solid #2563eb;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .metric-label { font-size: 0.8rem; color: #64748b; text-transform: uppercase; font-weight: 700; }
+    .metric-value { font-size: 1.8rem; font-weight: 800; color: #0f172a; margin-top: 0.5rem; }
+
+    /* Section Headers */
+    .section-header {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #1e293b;
+        margin: 2rem 0 1rem 0;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e2e8f0;
+    }
+
+    /* Form Styling */
+    .planner-card {
+        background: white;
+        padding: 2rem;
+        border-radius: 16px;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+    }
+    
+    .summary-box {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 16px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -89,17 +121,16 @@ def calculate_production_time(start_dt, impressions, machine_rate):
     return current_time
 
 def add_multi_part_job(job_data):
-    """Refactored logic to fix Finish-to-Start bottleneck with Staggered Overlaps."""
+    """Logic to fix Finish-to-Start bottleneck with Staggered Overlaps."""
     tid = f"JOB-{random.randint(1000, 9999)}"
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
 
-    # Determine Global Start (Anchor)
     anchor_start = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
     if anchor_start.hour < 8: anchor_start = anchor_start.replace(hour=8, minute=0)
     if anchor_start.hour >= 17: anchor_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
 
-    # 1. PRINTING STAGE (Sequential within parts)
+    # 1. PRINTING STAGE
     for comp in job_data['components']:
         current_stage_start = anchor_start
         for machine in comp['machines']:
@@ -111,25 +142,20 @@ def add_multi_part_job(job_data):
                 "start_time": current_stage_start.isoformat(), "finish_time": finish.isoformat(), 
                 "contract_value": float(val_per_stage)
             }).execute()
-            current_stage_start = finish # Next machine in print sequence starts after previous
+            current_stage_start = finish 
 
     # 2. FINISHING STAGE (Industry Overlap Logic)
-    # Note: We do NOT wait for 'current_stage_start' from the printing stage.
     die_cut_start_anchor = None
 
     for machine_name in job_data['finishing_machines']:
         if "DIE CUTTER" in machine_name.upper():
-            # RULE: Die cutting starts 24 hours after the START of printing
             f_start = anchor_start + timedelta(days=1)
             die_cut_start_anchor = f_start 
         elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
-            # RULE: Folder Gluer starts 2 hours after DIE CUTTING began
             f_start = die_cut_start_anchor + timedelta(hours=2)
         else:
-            # General finishing starts 4 hours after printing starts if not specified
             f_start = anchor_start + timedelta(hours=4)
 
-        # Normalize start to work hours
         if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
         elif f_start.hour < 8: f_start = f_start.replace(hour=8, minute=0)
 
@@ -150,10 +176,32 @@ with tab_dash:
     df = get_db_jobs()
     if not df.empty:
         df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.markdown(f'<div class="metric-card"><div class="metric-label">Active Jobs</div><div class="metric-value">{df["job_name"].nunique()}</div></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-card"><div class="metric-label">Revenue</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
-        st.plotly_chart(px.bar(df.groupby('job_name')['contract_value'].sum().reset_index(), x='contract_value', y='job_name', orientation='h', title="Revenue by Project"), use_container_width=True)
+        
+        # KPI Row
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Active Jobs</div><div class="metric-value">{df["job_name"].nunique()}</div></div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Pipeline Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
+        with col3:
+            books = df[df['ups'] == 1]['job_name'].nunique()
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Book Projects</div><div class="metric-value">{books}</div></div>', unsafe_allow_html=True)
+        with col4:
+            skillets = df[df['ups'] == 2]['job_name'].nunique()
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Skillet Jobs</div><div class="metric-value">{skillets}</div></div>', unsafe_allow_html=True)
+
+        # Strategic Insights Row
+        st.markdown('<p class="section-header">📊 Strategic Insights</p>', unsafe_allow_html=True)
+        left, right = st.columns([2, 1])
+        with left:
+            load_df = df.groupby('machine').size().reset_index(name='Queue')
+            fig = px.bar(load_df, x='machine', y='Queue', color='Queue', 
+                         color_continuous_scale='Blues', title="Machine Load Analysis (Job Queue Count)")
+            st.plotly_chart(fig, use_container_width=True)
+        with right:
+            rev_df = df.groupby('job_name')['contract_value'].sum().reset_index()
+            fig_pie = px.pie(rev_df, values='contract_value', names='job_name', hole=0.5, title="Revenue Concentration")
+            st.plotly_chart(fig_pie, use_container_width=True)
 
 with tab_plan:
     st.markdown('<p class="section-header">Project Architecture</p>', unsafe_allow_html=True)
@@ -203,11 +251,21 @@ with tab_control:
     if not df.empty:
         df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
-        st.plotly_chart(px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", title="Live Production Timeline (Day Shift Only)"), use_container_width=True)
         
+        st.markdown('<p class="section-header">⌛ Live Production Timeline</p>', unsafe_allow_html=True)
+        fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
+                          template="plotly_white", color_discrete_sequence=px.colors.qualitative.Bold)
+        fig.update_layout(height=400, margin=dict(t=0, b=0, l=0, r=0))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown('<p class="section-header">📋 Detailed Production Queue</p>', unsafe_allow_html=True)
         for name, group in df.groupby('job_name'):
-            with st.expander(f"📋 {name}"):
-                st.table(group[['machine', 'start_time', 'finish_time']])
-                if st.button(f"Delete {name}", key=name):
+            with st.expander(f"📦 {name.upper()} | Status: IN PRODUCTION"):
+                display_df = group[['machine', 'impressions', 'start_time', 'finish_time']].copy()
+                display_df['start_time'] = display_df['start_time'].dt.strftime('%d %b, %H:%M')
+                display_df['finish_time'] = display_df['finish_time'].dt.strftime('%d %b, %H:%M')
+                st.table(display_df)
+                
+                if st.button(f"🗑️ Scrap {name}", key=name):
                     supabase.table('jobs').delete().eq('job_name', name).execute()
                     st.rerun()
