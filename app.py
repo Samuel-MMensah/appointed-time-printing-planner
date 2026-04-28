@@ -137,18 +137,18 @@ def add_multi_part_job(job_data):
         elif f_start.hour < 8: f_start = f_start.replace(hour=8, minute=0)
 
         # --- Updated Finishing Logic for Die Cutter ---
-for machine_name in job_data['finishing_machines']:
-    if "DIE CUTTER" in machine_name.upper():
-        f_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
-        die_cut_start_anchor = f_start 
-        # FIX: Calculate finish time based on a standard daily throughput (e.g., 1 day of work)
-        # instead of the full 2 million impressions to show realistic availability.
-        calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
-    elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
-        f_start = die_cut_start_anchor + timedelta(hours=2)
-        calculation_qty = job_data['total_qty'] # Gluer tracks total completion
-    else:
-        f_start = anchor_start + timedelta(hours=4)
+        for machine_name in job_data['finishing_machines']:
+            if "DIE CUTTER" in machine_name.upper():
+                f_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
+                die_cut_start_anchor = f_start 
+                # FIX: Calculate finish time based on a standard daily throughput (e.g., 1 day of work)
+                # instead of the full 2 million impressions to show realistic availability.
+                calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
+            elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
+                f_start = die_cut_start_anchor + timedelta(hours=2)
+                calculation_qty = job_data['total_qty'] # Gluer tracks total completion
+        else:
+            f_start = anchor_start + timedelta(hours=4)
         calculation_qty = job_data['total_qty']
 
     # Normalize and calculate
