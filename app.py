@@ -1,5 +1,5 @@
 import streamlit as st
-import pd
+import pandas as pd
 from datetime import datetime, timedelta, timezone
 import math
 import random
