@@ -94,7 +94,7 @@ def calculate_production_time(start_dt, impressions, machine_rate):
     return current_time
 
 def add_multi_part_job(job_data):
-    """FIXED: Corrected Die Cutter logic and loop integrity."""
+    """FIXED: Applied industrial 'Waterfall' logic across ALL machines."""
     tid = f"JOB-{random.randint(1000, 9999)}"
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
@@ -117,24 +117,30 @@ def add_multi_part_job(job_data):
             }).execute()
             current_stage_start = finish 
 
-    # 2. FINISHING STAGE (Fixed Loop & Die Cutter logic)
-    die_cut_start_anchor = None
+    # 2. FINISHING STAGE (Strict Industry Sequencing)
+    # Step A: Sort finishing to ensure logical dependency (Die Cutter -> Gluer)
+    ordered_finishing = sorted(job_data['finishing_machines'], 
+                               key=lambda x: 0 if "DIE" in x.upper() else (1 if "FOLDER" in x.upper() else 2))
 
-    for machine_name in job_data['finishing_machines']:
-        # Determine Start Time
+    # Step B: Set Finishing Start to 24h after Printing starts (WIP Buffer)
+    finishing_anchor = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
+
+    for machine_name in ordered_finishing:
+        # Determine logical start offset
         if "DIE CUTTER" in machine_name.upper():
-            f_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
-            die_cut_start_anchor = f_start 
-            # FIX: Use daily throughput for finish time calculation to avoid timeline stretching
+            f_start = finishing_anchor
+            # Use daily capacity (8hr run) to calculate finish date to avoid artifical backlog
             calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
-        elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
-            f_start = die_cut_start_anchor + timedelta(hours=2)
+        elif "FOLDER GLUER" in machine_name.upper():
+            # Starts 2 hours after the Die Cutter begins
+            f_start = finishing_anchor + timedelta(hours=2)
             calculation_qty = job_data['total_qty']
         else:
+            # Default finishing starts 4h after print begins
             f_start = anchor_start + timedelta(hours=4)
             calculation_qty = job_data['total_qty']
 
-        # Normalize start time
+        # Normalize start time to 8am-5pm window
         if f_start.hour >= 17: 
             f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
         elif f_start.hour < 8: 
@@ -151,6 +157,9 @@ def add_multi_part_job(job_data):
             "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
             "contract_value": float(val_per_stage)
         }).execute()
+        
+        # Advance the anchor so the next finishing step is staggered correctly
+        finishing_anchor = f_start
 
 # --- 5. UI TABS ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
