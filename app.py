@@ -94,7 +94,7 @@ def calculate_production_time(start_dt, impressions, machine_rate):
     return current_time
 
 def add_multi_part_job(job_data):
-    """FIXED: Optimized Logic for Overlap & Staggered Starts."""
+    """FIXED: Corrected Die Cutter logic and loop integrity."""
     tid = f"JOB-{random.randint(1000, 9999)}"
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
@@ -117,53 +117,40 @@ def add_multi_part_job(job_data):
             }).execute()
             current_stage_start = finish 
 
-    # 2. FINISHING STAGE (Fixed Industry Overlap)
+    # 2. FINISHING STAGE (Fixed Loop & Die Cutter logic)
     die_cut_start_anchor = None
 
     for machine_name in job_data['finishing_machines']:
+        # Determine Start Time
         if "DIE CUTTER" in machine_name.upper():
-            # Snap to next morning (approx 24h later) to ensure WIP exists
             f_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
             die_cut_start_anchor = f_start 
+            # FIX: Use daily throughput for finish time calculation to avoid timeline stretching
+            calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
         elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
-            # Snap to 2 hours after Die Cutter started
             f_start = die_cut_start_anchor + timedelta(hours=2)
-        else:
-            # Default finishing overlap (4h after start)
-            f_start = anchor_start + timedelta(hours=4)
-
-        # Normalize any late starts to next work day morning
-        if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
-        elif f_start.hour < 8: f_start = f_start.replace(hour=8, minute=0)
-
-        # --- Updated Finishing Logic for Die Cutter ---
-        for machine_name in job_data['finishing_machines']:
-            if "DIE CUTTER" in machine_name.upper():
-                f_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
-                die_cut_start_anchor = f_start 
-                # FIX: Calculate finish time based on a standard daily throughput (e.g., 1 day of work)
-                # instead of the full 2 million impressions to show realistic availability.
-                calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
-            elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
-                f_start = die_cut_start_anchor + timedelta(hours=2)
-                calculation_qty = job_data['total_qty'] # Gluer tracks total completion
+            calculation_qty = job_data['total_qty']
         else:
             f_start = anchor_start + timedelta(hours=4)
-        calculation_qty = job_data['total_qty']
+            calculation_qty = job_data['total_qty']
 
-    # Normalize and calculate
-    if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
-    
-    # Use calculation_qty instead of total_qty to determine the finish_time
-    f_finish = calculate_production_time(f_start, calculation_qty, MACHINE_DATA[machine_name]['rate'])
-        
-    supabase.table('jobs').insert({
-        "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
-        "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
-        "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
-        "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
-        "contract_value": float(val_per_stage)
-    }).execute()
+        # Normalize start time
+        if f_start.hour >= 17: 
+            f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
+        elif f_start.hour < 8: 
+            f_start = f_start.replace(hour=8, minute=0)
+
+        # Calculate finish time
+        f_finish = calculate_production_time(f_start, calculation_qty, MACHINE_DATA[machine_name]['rate'])
+            
+        # Record to Database
+        supabase.table('jobs').insert({
+            "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
+            "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
+            "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
+            "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
+            "contract_value": float(val_per_stage)
+        }).execute()
 
 # --- 5. UI TABS ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
