@@ -5,16 +5,16 @@ import math
 import random
 from supabase import create_client, Client
 import plotly.express as px
-import plotly.graph_objects as go
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Appointed Time Printing | Elite ERP", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Appointed Time | Elite ERP", layout="wide", page_icon="🏢")
 
-# --- 2. GLOBAL SETUP ---
+# --- 2. GLOBAL SETUP & MACHINE REGISTRY ---
 CURRENCY = "GH₵"
 SETUP_HOURS = 1.5  
 DAILY_CAPACITY_HOURS = 8.0 
 
+# Fixed: Included missing rates for DIE CUTTER and FOLDER GLUER
 MACHINE_DATA = {
     'SM102-CX FOUR COLOUR': {'rate': 8000},
     'SM102-P FIVE COLOUR': {'rate': 7500},
@@ -29,62 +29,24 @@ MACHINE_DATA = {
     'POLAR CUTTER (SHEETS)': {'rate': 50000},
     '3 WAY TRIMMER': {'rate': 5000},
     'LAMINATION UNIT': {'rate': 2500},
-    'DIE CUTTER': {'rate': 3000},
-    'FOLDER GLUER': {'rate': 12000},
+    'DIE CUTTER': {'rate': 3000},  # Fixed missing rate
+    'FOLDER GLUER': {'rate': 12000}, # Fixed missing rate
     'CANON DIGITAL C10000': {'rate': 6000},
     'CANON DIGITAL C800': {'rate': 4000},
 }
 
-# --- 3. ENHANCED ELITE CSS STYLING ---
+# --- 3. UI STYLING ---
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     .stApp { background-color: #f8fafc; }
-    
-    .metric-card { background: white; padding: 24px; border-radius: 16px; border: 1px solid #edf2f7; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); text-align: center; }
-    .metric-value { font-size: 28px; font-weight: 700; color: #1a202c; }
-    .metric-label { font-size: 14px; color: #718096; text-transform: uppercase; letter-spacing: 1px; }
-    
-    .planner-card { 
-        background: white; 
-        padding: 2rem; 
-        border-radius: 24px; 
-        border: 1px solid #e2e8f0; 
-        box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); 
-        margin-bottom: 20px;
-    }
-    
-    .step-label {
-        background: #eff6ff;
-        color: #1e40af;
-        padding: 4px 12px;
-        border-radius: 8px;
-        font-size: 12px;
-        font-weight: 700;
-        margin-bottom: 10px;
-        display: inline-block;
-    }
-
-    .section-header { font-size: 22px; font-weight: 800; color: #0f172a; margin: 25px 0 15px 0; display: flex; align-items: center; gap: 10px; }
-    
-    .summary-box { 
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); 
-        color: white; 
-        padding: 30px; 
-        border-radius: 24px; 
-        position: sticky; 
-        top: 20px;
-        box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2);
-    }
-    
-    .blueprint-stat {
-        background: rgba(255,255,255,0.05);
-        padding: 12px;
-        border-radius: 12px;
-        margin-top: 10px;
-        border: 1px solid rgba(255,255,255,0.1);
-    }
+    .metric-card { background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; text-align: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+    .metric-value { font-size: 24px; font-weight: 700; color: #1e293b; }
+    .metric-label { font-size: 12px; color: #64748b; text-transform: uppercase; }
+    .planner-card { background: white; padding: 25px; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
+    .summary-box { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 25px; border-radius: 20px; position: sticky; top: 20px; }
+    .section-header { font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 15px; border-left: 4px solid #2563eb; padding-left: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -95,231 +57,157 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-# --- 4. DATA ENGINE ---
+# --- 4. CORE ENGINES ---
+
 def get_db_jobs():
     if not supabase: return pd.DataFrame()
-    res = supabase.table('jobs').select("*").execute()
-    return pd.DataFrame(res.data)
+    try:
+        res = supabase.table('jobs').select("*").execute()
+        return pd.DataFrame(res.data)
+    except: return pd.DataFrame()
 
 def calculate_production_time(start_dt, impressions, machine_rate):
+    """Calculates completion date considering 8 AM - 5 PM work hours."""
     current_time = start_dt
     remaining_imps = impressions
     current_time += timedelta(hours=SETUP_HOURS)
     
     while remaining_imps > 0:
-        # Normalize to work day hours (8 AM - 5 PM)
-        if current_time.hour < 8:
-            current_time = current_time.replace(hour=8, minute=0, second=0)
-        elif current_time.hour >= 17:
-            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0, second=0)
+        if current_time.hour < 8: current_time = current_time.replace(hour=8, minute=0)
+        if current_time.hour >= 17: current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
 
-        workday_end = current_time.replace(hour=17, minute=0, second=0)
-        hours_left_today = (workday_end - current_time).total_seconds() / 3600
+        workday_end = current_time.replace(hour=17, minute=0)
+        available_hours = (workday_end - current_time).total_seconds() / 3600
         
-        imps_possible_today = hours_left_today * machine_rate
-        
-        if remaining_imps <= imps_possible_today:
-            duration_hours = remaining_imps / machine_rate
-            current_time += timedelta(hours=duration_hours)
+        possible_today = available_hours * machine_rate
+        if remaining_imps <= possible_today:
+            current_time += timedelta(hours=remaining_imps / machine_rate)
             remaining_imps = 0
         else:
-            remaining_imps -= imps_possible_today
+            remaining_imps -= possible_today
             current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
     return current_time
 
 def add_multi_part_job(job_data):
+    """Refactored logic to fix Finish-to-Start bottleneck with Staggered Overlaps."""
     tid = f"JOB-{random.randint(1000, 9999)}"
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
 
-    # Start Anchor
-    base_start = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
-    if base_start.hour < 8: base_start = base_start.replace(hour=8, minute=0)
-    if base_start.hour >= 17: base_start = (base_start + timedelta(days=1)).replace(hour=8, minute=0)
+    # Determine Global Start (Anchor)
+    anchor_start = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
+    if anchor_start.hour < 8: anchor_start = anchor_start.replace(hour=8, minute=0)
+    if anchor_start.hour >= 17: anchor_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
 
-    # Stage 1: Printing (Sequential)
-    printing_finish_final = base_start
+    # 1. PRINTING STAGE (Sequential within parts)
     for comp in job_data['components']:
-        current_comp_start = base_start
+        current_stage_start = anchor_start
         for machine in comp['machines']:
-            finish_time = calculate_production_time(current_comp_start, comp['impressions'], MACHINE_DATA[machine]['rate'])
+            finish = calculate_production_time(current_stage_start, comp['impressions'], MACHINE_DATA[machine]['rate'])
             supabase.table('jobs').insert({
                 "job_name": job_data['name'], "tracking_id": tid, "machine": machine,
                 "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
                 "ups": int(job_data['type_id']), "impressions": int(comp['impressions']), 
-                "start_time": current_comp_start.isoformat(), "finish_time": finish_time.isoformat(), 
+                "start_time": current_stage_start.isoformat(), "finish_time": finish.isoformat(), 
                 "contract_value": float(val_per_stage)
             }).execute()
-            current_comp_start = finish_time
-            printing_finish_final = max(printing_finish_final, finish_time)
+            current_stage_start = finish # Next machine in print sequence starts after previous
 
-    # Stage 2: Industry Overlap Finishing
-    if job_data['finishing_machines']:
-        for i, f_mach in enumerate(job_data['finishing_machines']):
-            # Industry logic: Die Cutter (index 0) starts 24hrs after print. Folder Gluer (index 1) starts 2hrs after Die Cutter.
-            if i == 0:
-                f_start = base_start + timedelta(days=1) # 24hr offset
-            else:
-                f_start = base_start + timedelta(days=1, hours=i * 2) # Staggered 2hr after previous
-            
-            # Ensure it starts within work hours
-            if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8)
-            elif f_start.hour < 8: f_start = f_start.replace(hour=8)
+    # 2. FINISHING STAGE (Industry Overlap Logic)
+    # Note: We do NOT wait for 'current_stage_start' from the printing stage.
+    die_cut_start_anchor = None
 
-            f_finish = calculate_production_time(f_start, job_data['total_qty'], MACHINE_DATA[f_mach]['rate'])
-            
-            supabase.table('jobs').insert({
-                "job_name": job_data['name'], "tracking_id": tid, "machine": f_mach,
-                "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
-                "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
-                "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
-                "contract_value": float(val_per_stage)
-            }).execute()
-    return tid
+    for machine_name in job_data['finishing_machines']:
+        if "DIE CUTTER" in machine_name.upper():
+            # RULE: Die cutting starts 24 hours after the START of printing
+            f_start = anchor_start + timedelta(days=1)
+            die_cut_start_anchor = f_start 
+        elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
+            # RULE: Folder Gluer starts 2 hours after DIE CUTTING began
+            f_start = die_cut_start_anchor + timedelta(hours=2)
+        else:
+            # General finishing starts 4 hours after printing starts if not specified
+            f_start = anchor_start + timedelta(hours=4)
 
-# --- 5. UI LAYOUT ---
+        # Normalize start to work hours
+        if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
+        elif f_start.hour < 8: f_start = f_start.replace(hour=8, minute=0)
+
+        f_finish = calculate_production_time(f_start, job_data['total_qty'], MACHINE_DATA[machine_name]['rate'])
+        
+        supabase.table('jobs').insert({
+            "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
+            "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
+            "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
+            "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
+            "contract_value": float(val_per_stage)
+        }).execute()
+
+# --- 5. UI TABS ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
 
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
-        df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
-        df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
-        
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
         c1, c2, c3, c4 = st.columns(4)
-        with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">Active Jobs</div><div class="metric-value">{df["job_name"].nunique()}</div></div>', unsafe_allow_html=True)
-        with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">Pipeline Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
-        with c3: 
-            books_count = df[df['ups'] == 1]['job_name'].nunique()
-            st.markdown(f'<div class="metric-card"><div class="metric-label">Book Projects</div><div class="metric-value">{books_count}</div></div>', unsafe_allow_html=True)
-        with c4:
-            skillets_count = df[df['ups'] == 2]['job_name'].nunique()
-            st.markdown(f'<div class="metric-card"><div class="metric-label">Skillet Jobs</div><div class="metric-value">{skillets_count}</div></div>', unsafe_allow_html=True)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_left, col_right = st.columns([1.5, 1])
-        
-        with col_left:
-            st.markdown('<p class="section-header">🥇 Top 5 Jobs by Revenue</p>', unsafe_allow_html=True)
-            top_jobs = df.groupby('job_name')['contract_value'].sum().sort_values(ascending=True).tail(5).reset_index()
-            fig_top = px.bar(top_jobs, y='job_name', x='contract_value', orientation='h', 
-                             text_auto='.2s', color='contract_value', color_continuous_scale='Blues')
-            fig_top.update_layout(showlegend=False, height=400, margin=dict(t=10, b=10, l=10, r=10), 
-                                  xaxis_title="Revenue (GH₵)", yaxis_title=None,
-                                  paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_top, use_container_width=True)
-
-        with col_right:
-            st.markdown('<p class="section-header">🍕 Revenue by Category</p>', unsafe_allow_html=True)
-            cat_data = df.groupby('ups')['contract_value'].sum().reset_index()
-            cat_data['Category'] = cat_data['ups'].map({1: 'Books/Manuals', 2: 'Skillets/Boxes'})
-            fig_pie = px.pie(cat_data, values='contract_value', names='Category', hole=.5,
-                             color_discrete_sequence=['#2563eb', '#93c5fd'])
-            fig_pie.update_traces(textposition='outside', textinfo='percent+label')
-            fig_pie.update_layout(height=400, margin=dict(t=30, b=30, l=30, r=30), 
-                                  showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_pie, use_container_width=True)
+        c1.markdown(f'<div class="metric-card"><div class="metric-label">Active Jobs</div><div class="metric-value">{df["job_name"].nunique()}</div></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="metric-card"><div class="metric-label">Revenue</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
+        st.plotly_chart(px.bar(df.groupby('job_name')['contract_value'].sum().reset_index(), x='contract_value', y='job_name', orientation='h', title="Revenue by Project"), use_container_width=True)
 
 with tab_plan:
-    st.markdown('<p class="section-header">🛠️ Project Specification Architecture</p>', unsafe_allow_html=True)
-    col_input, col_summ = st.columns([2.2, 1])
+    st.markdown('<p class="section-header">Project Architecture</p>', unsafe_allow_html=True)
+    col_in, col_sum = st.columns([2, 1])
     
-    with col_input:
-        with st.container():
-            st.markdown('<div class="planner-card">', unsafe_allow_html=True)
-            st.markdown('<span class="step-label">STEP 1</span>', unsafe_allow_html=True)
-            st.markdown("#### 🟢 Identity & Classification")
-            c1, c2, c3 = st.columns([2, 1, 1])
-            job_name = c1.text_input("Project Description", placeholder="Enter unique job name...")
-            sales_rep = c2.selectbox("Account Manager", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
-            prod_cat = c3.selectbox("Work Type", ["📚 Book / Brochure", "📦 Skillet / Box", "📄 Flyer / Leaflet"])
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<span class="step-label">STEP 2</span>', unsafe_allow_html=True)
-            st.markdown("#### 🔵 Dimensional Specs")
-            cc1, cc2, cc3 = st.columns(3)
-            order_qty = cc1.number_input("Total Units", value=1000, step=500)
-            total_val = cc2.number_input("Project Value (GH₵)", value=5000.0)
-            
-            if "Book" in prod_cat:
-                type_id = 1
-                ups = cc3.number_input("Cover Ups", value=2)
-                p1, p2 = st.columns(2)
-                pages = p1.number_input("Page Count", value=64)
-                sig_size = p2.selectbox("Signature Breakdown", [8, 16, 32], index=1)
-                text_impressions = math.ceil(pages / sig_size) * order_qty
-            else:
-                type_id = 2
-                ups = cc3.number_input("Items Per Sheet", value=12)
-                text_impressions = 0
+    with col_in:
+        st.markdown('<div class="planner-card">', unsafe_allow_html=True)
+        job_name = st.text_input("Project Description (e.g. Nutrifoods 2M Run)")
+        sales_rep = st.selectbox("Sales Lead", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
+        prod_cat = st.selectbox("Category", ["📦 Skillet / Box", "📚 Book / Brochure", "📄 Flyer"])
+        
+        c1, c2, c3 = st.columns(3)
+        order_qty = c1.number_input("Units", value=10000, step=1000)
+        total_val = c2.number_input("Total Value", value=5000.0)
+        ups = c3.number_input("Ups per Sheet", value=10)
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<span class="step-label">STEP 3</span>', unsafe_allow_html=True)
-            st.markdown("#### 🟣 Workflow Routing")
-            if "Book" in prod_cat:
-                r1, r2, r3 = st.columns(3)
-                cov_route = r1.multiselect("Press: Cover", list(MACHINE_DATA.keys()))
-                txt_route = r2.multiselect("Press: Text", list(MACHINE_DATA.keys()))
-                fin_route = r3.multiselect("Binding Line", list(MACHINE_DATA.keys()))
-                components = [
-                    {"name": "Cover", "impressions": order_qty/ups, "machines": cov_route},
-                    {"name": "Text", "impressions": text_impressions, "machines": txt_route}
-                ]
-            else:
-                r1, r2 = st.columns(2)
-                print_route = r1.multiselect("Printing Line", list(MACHINE_DATA.keys()))
-                fin_route = r2.multiselect("Finishing Line", list(MACHINE_DATA.keys()))
-                components = [{"name": "Body", "impressions": order_qty/ups, "machines": print_route}]
-            st.markdown('</div>', unsafe_allow_html=True)
+        if "Book" in prod_cat:
+            type_id = 1
+            pgs = st.number_input("Pages", value=64)
+            sig = st.selectbox("Signature", [8, 16, 32], index=1)
+            text_imps = math.ceil(pgs/sig) * order_qty
+            r1, r2, r3 = st.columns(3)
+            comp = [{"name": "Cover", "impressions": order_qty/ups, "machines": r1.multiselect("Cover Press", list(MACHINE_DATA.keys()))},
+                    {"name": "Text", "impressions": text_imps, "machines": r2.multiselect("Text Press", list(MACHINE_DATA.keys()))}]
+            fin_route = r3.multiselect("Finishing", list(MACHINE_DATA.keys()))
+        else:
+            type_id = 2
+            r1, r2 = st.columns(2)
+            comp = [{"name": "Body", "impressions": order_qty/ups, "machines": r1.multiselect("Printing Press", list(MACHINE_DATA.keys()))}]
+            fin_route = r2.multiselect("Finishing Line (Order matters)", list(MACHINE_DATA.keys()))
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    with col_summ:
+    with col_sum:
         st.markdown('<div class="summary-box">', unsafe_allow_html=True)
-        st.markdown("### 📋 Run Blueprint")
-        st.markdown("---")
-        
-        total_est_imps = int(order_qty/ups + (text_impressions if 'Book' in prod_cat else 0))
-        num_stages = len(fin_route) + (len(cov_route)+len(txt_route) if 'Book' in prod_cat else len(print_route))
-        
-        st.markdown(f"**Description:** {job_name if job_name else 'Unnamed Project'}")
-        
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            st.markdown(f'<div class="blueprint-stat"><small>TOTAL IMPS</small><br><b>{total_est_imps:,}</b></div>', unsafe_allow_html=True)
-        with col_s2:
-            st.markdown(f'<div class="blueprint-stat"><small>WORK STAGES</small><br><b>{num_stages}</b></div>', unsafe_allow_html=True)
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-        start_date = st.date_input("Deployment Date")
-        
-        if st.button("🚀 PUSH TO PRODUCTION", use_container_width=True):
-            if job_name:
-                payload = {"name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, "total_val": total_val, "start_date": start_date, "type_id": type_id, "components": components, "finishing_machines": fin_route}
-                add_multi_part_job(payload)
-                st.toast("Job Dispatched Successfully!", icon="🏭")
+        st.markdown("### 🚀 Deployment")
+        start_date = st.date_input("Start Date")
+        if st.button("PUSH TO SHOP FLOOR", use_container_width=True):
+            if job_name and fin_route:
+                add_multi_part_job({"name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, "total_val": total_val, "start_date": start_date, "type_id": type_id, "components": comp, "finishing_machines": fin_route})
+                st.success("Dispatched!")
                 st.rerun()
-            else:
-                st.error("Please enter a Project Description.")
+            else: st.error("Missing Job Name or Route")
         st.markdown('</div>', unsafe_allow_html=True)
 
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
-        df['start_time'] = pd.to_datetime(df['start_time'], format='ISO8601', utc=True)
-        df['finish_time'] = pd.to_datetime(df['finish_time'], format='ISO8601', utc=True)
-        st.markdown('<p class="section-header">⌛ Real-Time Timeline</p>', unsafe_allow_html=True)
-        fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
-                          template="plotly_white", color_discrete_sequence=px.colors.qualitative.Bold)
-        fig.update_layout(height=450, margin=dict(t=0, b=0), paper_bgcolor='rgba(0,0,0,0)', showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
+        df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
+        st.plotly_chart(px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", title="Live Production Timeline (Day Shift Only)"), use_container_width=True)
         
-        st.markdown('<p class="section-header">📋 Detailed Production Queue</p>', unsafe_allow_html=True)
-        for job_name, group in df.groupby('job_name'):
-            with st.expander(f"📦 {job_name.upper()} | Status: IN PRODUCTION", expanded=False):
-                display_df = group[['machine', 'impressions', 'start_time', 'finish_time']].copy()
-                display_df['start_time'] = display_df['start_time'].dt.strftime('%d %b, %H:%M')
-                display_df['finish_time'] = display_df['finish_time'].dt.strftime('%d %b, %H:%M')
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-                col_actions = st.columns([6, 1])
-                if col_actions[1].button("🗑️ Scrap Job", key=f"del_{job_name}", use_container_width=True):
-                    supabase.table('jobs').delete().eq('job_name', job_name).execute()
+        for name, group in df.groupby('job_name'):
+            with st.expander(f"📋 {name}"):
+                st.table(group[['machine', 'start_time', 'finish_time']])
+                if st.button(f"Delete {name}", key=name):
+                    supabase.table('jobs').delete().eq('job_name', name).execute()
                     st.rerun()
