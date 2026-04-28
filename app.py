@@ -136,13 +136,26 @@ def add_multi_part_job(job_data):
         if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
         elif f_start.hour < 8: f_start = f_start.replace(hour=8, minute=0)
 
-        if "DIE CUTTER" in machine_name.upper():
-            # Only calculate the finish time based on a 1-day lead volume 
-            # to prevent the timeline from stretching to June/July
-            effective_qty = MACHINE_DATA[machine_name]['rate'] * 8 
-            f_finish = calculate_production_time(f_start, effective_qty, MACHINE_DATA[machine_name]['rate'])
-        else:
-            f_finish = calculate_production_time(f_start, job_data['total_qty'], MACHINE_DATA[machine_name]['rate'])
+        # --- Updated Finishing Logic for Die Cutter ---
+for machine_name in job_data['finishing_machines']:
+    if "DIE CUTTER" in machine_name.upper():
+        f_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
+        die_cut_start_anchor = f_start 
+        # FIX: Calculate finish time based on a standard daily throughput (e.g., 1 day of work)
+        # instead of the full 2 million impressions to show realistic availability.
+        calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
+    elif "FOLDER GLUER" in machine_name.upper() and die_cut_start_anchor:
+        f_start = die_cut_start_anchor + timedelta(hours=2)
+        calculation_qty = job_data['total_qty'] # Gluer tracks total completion
+    else:
+        f_start = anchor_start + timedelta(hours=4)
+        calculation_qty = job_data['total_qty']
+
+    # Normalize and calculate
+    if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
+    
+    # Use calculation_qty instead of total_qty to determine the finish_time
+    f_finish = calculate_production_time(f_start, calculation_qty, MACHINE_DATA[machine_name]['rate'])
         
         supabase.table('jobs').insert({
             "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
