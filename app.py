@@ -14,6 +14,7 @@ CURRENCY = "GH₵"
 SETUP_HOURS = 1.5  
 DAILY_CAPACITY_HOURS = 8.0 
 
+# Machine Registry updated with official net daily yield logic
 MACHINE_DATA = {
     'SM102-CX FOUR COLOUR': {'rate': 8000},
     'SM102-P FIVE COLOUR': {'rate': 7500},
@@ -34,7 +35,7 @@ MACHINE_DATA = {
     'CANON DIGITAL C800': {'rate': 4000},
 }
 
-# --- 3. ENHANCED EXECUTIVE UI STYLING ---
+# --- 3. UI STYLING ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -72,29 +73,35 @@ def get_db_jobs():
     except: return pd.DataFrame()
 
 def calculate_production_time(start_dt, impressions, machine_rate):
-    """Calculates completion date considering 8 AM - 5 PM work hours."""
+    """Calculates completion date considering 8 AM - 5 PM and 1.5hr daily setup."""
     current_time = start_dt
     remaining_imps = impressions
-    current_time += timedelta(hours=SETUP_HOURS)
     
     while remaining_imps > 0:
+        # Normalize to work day start
         if current_time.hour < 8: current_time = current_time.replace(hour=8, minute=0)
         if current_time.hour >= 17: current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
 
-        workday_end = current_time.replace(hour=17, minute=0)
-        available_hours = (workday_end - current_time).total_seconds() / 3600
+        # Step 1: Dedicate first 1.5 hours of any new day to setup [Official Registry Logic]
+        current_time += timedelta(hours=SETUP_HOURS)
         
-        possible_today = available_hours * machine_rate
+        # Step 2: Determine available production hours remaining in the shift
+        workday_end = current_time.replace(hour=17, minute=0)
+        prod_hours_available = max(0, (workday_end - current_time).total_seconds() / 3600)
+        
+        possible_today = prod_hours_available * machine_rate
+        
         if remaining_imps <= possible_today:
             current_time += timedelta(hours=remaining_imps / machine_rate)
             remaining_imps = 0
         else:
             remaining_imps -= possible_today
             current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
+            
     return current_time
 
 def add_multi_part_job(job_data):
-    """FIXED: Applied industrial 'Waterfall' logic across ALL machines."""
+    """Waterfall logic: Parallel processing with WIP Buffers."""
     tid = f"JOB-{random.randint(1000, 9999)}"
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
@@ -103,7 +110,7 @@ def add_multi_part_job(job_data):
     if anchor_start.hour < 8: anchor_start = anchor_start.replace(hour=8, minute=0)
     if anchor_start.hour >= 17: anchor_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
 
-    # 1. PRINTING STAGE (Sequential)
+    # 1. PRINTING STAGE
     for comp in job_data['components']:
         current_stage_start = anchor_start
         for machine in comp['machines']:
@@ -117,39 +124,31 @@ def add_multi_part_job(job_data):
             }).execute()
             current_stage_start = finish 
 
-    # 2. FINISHING STAGE (Strict Industry Sequencing)
-    # Step A: Sort finishing to ensure logical dependency (Die Cutter -> Gluer)
+    # 2. FINISHING STAGE (Waterfall logic)
     ordered_finishing = sorted(job_data['finishing_machines'], 
                                key=lambda x: 0 if "DIE" in x.upper() else (1 if "FOLDER" in x.upper() else 2))
 
-    # Step B: Set Finishing Start to 24h after Printing starts (WIP Buffer)
+    # WIP Buffer: Finishing starts 24h after Print Anchor
     finishing_anchor = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
 
     for machine_name in ordered_finishing:
-        # Determine logical start offset
         if "DIE CUTTER" in machine_name.upper():
             f_start = finishing_anchor
-            # Use daily capacity (8hr run) to calculate finish date to avoid artifical backlog
-            calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
+            # Plan for daily batch progress
+            calc_qty = MACHINE_DATA[machine_name]['rate'] * (DAILY_CAPACITY_HOURS - SETUP_HOURS) 
         elif "FOLDER GLUER" in machine_name.upper():
-            # Starts 2 hours after the Die Cutter begins
-            f_start = finishing_anchor + timedelta(hours=2)
-            calculation_qty = job_data['total_qty']
+            f_start = finishing_anchor + timedelta(hours=2) # 2h Stagger from Die Cutter
+            calc_qty = job_data['total_qty']
         else:
-            # Default finishing starts 4h after print begins
             f_start = anchor_start + timedelta(hours=4)
-            calculation_qty = job_data['total_qty']
+            calc_qty = job_data['total_qty']
 
-        # Normalize start time to 8am-5pm window
-        if f_start.hour >= 17: 
-            f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
-        elif f_start.hour < 8: 
-            f_start = f_start.replace(hour=8, minute=0)
+        # Ensure start falls in work hours
+        if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
+        elif f_start.hour < 8: f_start = f_start.replace(hour=8, minute=0)
 
-        # Calculate finish time
-        f_finish = calculate_production_time(f_start, calculation_qty, MACHINE_DATA[machine_name]['rate'])
-            
-        # Record to Database
+        f_finish = calculate_production_time(f_start, calc_qty, MACHINE_DATA[machine_name]['rate'])
+        
         supabase.table('jobs').insert({
             "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
             "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
@@ -158,7 +157,6 @@ def add_multi_part_job(job_data):
             "contract_value": float(val_per_stage)
         }).execute()
         
-        # Advance the anchor so the next finishing step is staggered correctly
         finishing_anchor = f_start
 
 # --- 5. UI TABS ---
@@ -178,14 +176,9 @@ with tab_dash:
             skillets = df[df['ups'] == 2]['job_name'].nunique()
             st.markdown(f'<div class="metric-card"><div class="metric-label">Skillet Jobs</div><div class="metric-value">{skillets}</div></div>', unsafe_allow_html=True)
 
-        st.markdown('<p class="section-header">📊 Strategic Load & Revenue</p>', unsafe_allow_html=True)
-        left, right = st.columns([2, 1])
-        with left:
-            load_df = df.groupby('machine').size().reset_index(name='Queue')
-            st.plotly_chart(px.bar(load_df, x='machine', y='Queue', color='Queue', color_continuous_scale='Blues', title="Machine Load"), use_container_width=True)
-        with right:
-            rev_df = df.groupby('job_name')['contract_value'].sum().reset_index()
-            st.plotly_chart(px.pie(rev_df, values='contract_value', names='job_name', hole=0.5, title="Revenue Concentration"), use_container_width=True)
+        st.markdown('<p class="section-header">📊 Machine Load Distribution</p>', unsafe_allow_html=True)
+        load_df = df.groupby('machine').size().reset_index(name='Queue')
+        st.plotly_chart(px.bar(load_df, x='machine', y='Queue', color='Queue', title="Live Queue"), use_container_width=True)
 
 with tab_plan:
     st.markdown('<p class="section-header">Project Architecture</p>', unsafe_allow_html=True)
@@ -199,6 +192,7 @@ with tab_plan:
         order_qty = c1.number_input("Units", value=10000, step=1000)
         total_val = c2.number_input("Total Value", value=5000.0)
         ups = c3.number_input("Ups per Sheet", value=10)
+        
         if "Book" in prod_cat:
             type_id, pgs = 1, st.number_input("Pages", value=64)
             sig = st.selectbox("Signature", [8, 16, 32], index=1)
@@ -230,7 +224,7 @@ with tab_control:
         df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
         df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
         st.markdown('<p class="section-header">⌛ Live Production Timeline</p>', unsafe_allow_html=True)
-        fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white", color_discrete_sequence=px.colors.qualitative.Bold)
+        fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", template="plotly_white")
         fig.update_layout(height=400, margin=dict(t=0, b=0, l=0, r=0))
         st.plotly_chart(fig, use_container_width=True)
         for name, group in df.groupby('job_name'):
