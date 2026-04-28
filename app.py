@@ -136,7 +136,13 @@ def add_multi_part_job(job_data):
         if f_start.hour >= 17: f_start = (f_start + timedelta(days=1)).replace(hour=8, minute=0)
         elif f_start.hour < 8: f_start = f_start.replace(hour=8, minute=0)
 
-        f_finish = calculate_production_time(f_start, job_data['total_qty'], MACHINE_DATA[machine_name]['rate'])
+        if "DIE CUTTER" in machine_name.upper():
+    # Only calculate the finish time based on a 1-day lead volume 
+    # to prevent the timeline from stretching to June/July
+    effective_qty = MACHINE_DATA[machine_name]['rate'] * 8 
+    f_finish = calculate_production_time(f_start, effective_qty, MACHINE_DATA[machine_name]['rate'])
+else:
+    f_finish = calculate_production_time(f_start, job_data['total_qty'], MACHINE_DATA[machine_name]['rate'])
         
         supabase.table('jobs').insert({
             "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
