@@ -157,13 +157,13 @@ for machine_name in job_data['finishing_machines']:
     # Use calculation_qty instead of total_qty to determine the finish_time
     f_finish = calculate_production_time(f_start, calculation_qty, MACHINE_DATA[machine_name]['rate'])
         
-        supabase.table('jobs').insert({
-            "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
-            "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
-            "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
-            "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
-            "contract_value": float(val_per_stage)
-        }).execute()
+    supabase.table('jobs').insert({
+        "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
+        "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
+        "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
+        "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
+        "contract_value": float(val_per_stage)
+    }).execute()
 
 # --- 5. UI TABS ---
 tab_dash, tab_plan, tab_control = st.tabs(["🏛️ COMMAND CENTER", "⚙️ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
