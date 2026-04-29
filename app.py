@@ -12,7 +12,8 @@ st.set_page_config(page_title="Appointed Time | Elite ERP", layout="wide", page_
 # --- 2. GLOBAL SETUP & MACHINE REGISTRY ---
 CURRENCY = "GH₵"
 SETUP_HOURS = 1.5  
-DAILY_CAPACITY_HOURS = 8.0 
+BREAK_HOURS = 1.0
+DAILY_CAPACITY_HOURS = 8.0 # Net working hours after break
 
 MACHINE_DATA = {
     'SM102-CX FOUR COLOUR': {'rate': 8000},
@@ -50,7 +51,7 @@ st.markdown("""
         font-size: 1.25rem; font-weight: 700; color: #1e293b;
         margin: 2rem 0 1rem 0; padding-bottom: 0.5rem; border-bottom: 2px solid #e2e8f0;
     }
-    .planner-card { background: white; padding: 2rem; border-radius: 166px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
+    .planner-card { background: white; padding: 2rem; border-radius: 16px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
     .summary-box { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); color: white; padding: 2rem; border-radius: 16px; }
     </style>
     """, unsafe_allow_html=True)
@@ -71,30 +72,47 @@ def get_db_jobs():
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
-def calculate_production_time(start_dt, impressions, machine_rate):
-    """Calculates completion date considering 8 AM - 5 PM work hours."""
+def calculate_production_time(start_dt, total_to_produce, machine_rate):
+    """
+    Calculates completion date by applying the manager's logic:
+    Daily Yield = (8 Working Hours - 1.5 Setup Hours) * Rate
+    """
     current_time = start_dt
-    remaining_imps = impressions
-    current_time += timedelta(hours=SETUP_HOURS)
+    remaining = total_to_produce
     
-    while remaining_imps > 0:
-        if current_time.hour < 8: current_time = current_time.replace(hour=8, minute=0)
-        if current_time.hour >= 17: current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
+    while remaining > 0:
+        # Standardize to 8AM start if time is outside window
+        if current_time.hour < 8: 
+            current_time = current_time.replace(hour=8, minute=0, second=0, microsecond=0)
+        if current_time.hour >= 17: 
+            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
 
-        workday_end = current_time.replace(hour=17, minute=0)
-        available_hours = (workday_end - current_time).total_seconds() / 3600
+        # Productive window per day is 9 hours (8-5) - 1hr break - 1.5hr setup = 6.5 hours
+        # Calculate how much of the 6.5 productive hours are left today
+        workday_start = current_time.replace(hour=8, minute=0, second=0, microsecond=0)
+        workday_end = current_time.replace(hour=17, minute=0, second=0, microsecond=0)
         
-        possible_today = available_hours * machine_rate
-        if remaining_imps <= possible_today:
-            current_time += timedelta(hours=remaining_imps / machine_rate)
-            remaining_imps = 0
+        # The first 2.5 hours of any day (8:00 to 10:30) are non-productive (Setup + Break)
+        effective_production_start = max(current_time, workday_start + timedelta(hours=SETUP_HOURS + BREAK_HOURS))
+        
+        if effective_production_start >= workday_end:
+            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+            continue
+            
+        hours_left_today = (workday_end - effective_production_start).total_seconds() / 3600
+        possible_today = hours_left_today * machine_rate
+        
+        if remaining <= possible_today:
+            current_time = effective_production_start + timedelta(hours=remaining / machine_rate)
+            remaining = 0
         else:
-            remaining_imps -= possible_today
-            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0)
+            remaining -= possible_today
+            current_time = (current_time + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+            
     return current_time
 
 def add_multi_part_job(job_data):
-    """Industrial 'Waterfall' logic: Parallel processing with WIP Buffers."""
+    """Updated logic to match Manager's Unit vs Impression requirements."""
     tid = f"JOB-{random.randint(1000, 9999)}"
     total_stages = sum(len(c['machines']) for c in job_data['components']) + len(job_data['finishing_machines'])
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
@@ -103,7 +121,7 @@ def add_multi_part_job(job_data):
     if anchor_start.hour < 8: anchor_start = anchor_start.replace(hour=8, minute=0)
     if anchor_start.hour >= 17: anchor_start = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
 
-    # 1. PRINTING STAGE
+    # 1. PRINTING STAGE (Uses Impressions/Sheets)
     for comp in job_data['components']:
         current_stage_start = anchor_start
         for machine in comp['machines']:
@@ -117,18 +135,21 @@ def add_multi_part_job(job_data):
             }).execute()
             current_stage_start = finish 
 
-    # 2. FINISHING STAGE
+    # 2. FINISHING STAGE (Logic varies by Machine Type)
     ordered_finishing = sorted(job_data['finishing_machines'], 
                                key=lambda x: 0 if "DIE" in x.upper() else (1 if "FOLDER" in x.upper() else 2))
 
     finishing_anchor = (anchor_start + timedelta(days=1)).replace(hour=8, minute=0)
 
     for machine_name in ordered_finishing:
+        # Determine Quantity: DIE CUTTER uses Sheets (Impressions). GLUER uses Total Units.
         if "DIE CUTTER" in machine_name.upper():
             f_start = finishing_anchor
-            calculation_qty = MACHINE_DATA[machine_name]['rate'] * 8 
+            # Logic: Qty / Ups (The manager uses 166,666 for Die Cutting)
+            calculation_qty = job_data['total_qty'] / job_data['ups']
         elif "FOLDER GLUER" in machine_name.upper():
             f_start = finishing_anchor + timedelta(hours=2)
+            # Logic: Full Quantity (The manager uses 200,000 or 2,000,000 for Gluing)
             calculation_qty = job_data['total_qty']
         else:
             f_start = anchor_start + timedelta(hours=4)
@@ -144,7 +165,7 @@ def add_multi_part_job(job_data):
         supabase.table('jobs').insert({
             "job_name": job_data['name'], "tracking_id": tid, "machine": machine_name,
             "sales_rep": job_data['sales_rep'], "quantity": int(job_data['total_qty']),
-            "ups": int(job_data['type_id']), "impressions": int(job_data['total_qty']),
+            "ups": int(job_data['ups']), "impressions": int(calculation_qty),
             "start_time": f_start.isoformat(), "finish_time": f_finish.isoformat(),
             "contract_value": float(val_per_stage)
         }).execute()
@@ -186,9 +207,9 @@ with tab_plan:
         sales_rep = st.selectbox("Sales Lead", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
         prod_cat = st.selectbox("Category", ["📦 Skillet / Box", "📚 Book / Brochure", "📄 Flyer"])
         c1, c2, c3 = st.columns(3)
-        order_qty = c1.number_input("Units", value=10000, step=1000)
+        order_qty = c1.number_input("Units", value=200000, step=1000)
         total_val = c2.number_input("Total Value", value=5000.0)
-        ups = c3.number_input("Ups per Sheet", value=10)
+        ups = c3.number_input("Ups per Sheet", value=12)
         if "Book" in prod_cat:
             type_id, pgs = 1, st.number_input("Pages", value=64)
             sig = st.selectbox("Signature", [8, 16, 32], index=1)
@@ -209,7 +230,7 @@ with tab_plan:
         start_date = st.date_input("Start Date")
         if st.button("PUSH TO SHOP FLOOR", use_container_width=True):
             if job_name and fin_route:
-                add_multi_part_job({"name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, "total_val": total_val, "start_date": start_date, "type_id": type_id, "components": comp, "finishing_machines": fin_route})
+                add_multi_part_job({"name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, "total_val": total_val, "start_date": start_date, "ups": ups, "type_id": type_id, "components": comp, "finishing_machines": fin_route})
                 st.success("Dispatched!"); st.rerun()
             else: st.error("Missing Info")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -225,20 +246,12 @@ with tab_control:
         st.plotly_chart(fig, use_container_width=True)
         for name, group in df.groupby('job_name'):
             with st.expander(f"📦 {name.upper()}"):
-                # Prepare data for display
                 d_df = group[['machine', 'impressions', 'start_time', 'finish_time']].copy()
-                
-                # NEW COLUMN: Calculate Net Daily Capacity (8h - 1.5h Setup = 6.5h yield)
                 d_df['Capacity (Daily)'] = d_df['machine'].apply(
                     lambda x: f"{int((DAILY_CAPACITY_HOURS - SETUP_HOURS) * MACHINE_DATA[x]['rate']):,}"
                 )
-                
-                # Format time for readability
                 d_df['start_time'] = d_df['start_time'].dt.strftime('%d %b, %H:%M')
                 d_df['finish_time'] = d_df['finish_time'].dt.strftime('%d %b, %H:%M')
-                
-                # Display table with the new Capacity column
                 st.table(d_df)
-                
                 if st.button(f"🗑️ Scrap {name}", key=name):
                     supabase.table('jobs').delete().eq('job_name', name).execute(); st.rerun()
