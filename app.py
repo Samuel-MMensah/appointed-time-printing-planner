@@ -172,7 +172,7 @@ with tab_dash:
         df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
         col1, col2, col3, col4 = st.columns(4)
         with col1: st.markdown(f'<div class="metric-card"><div class="metric-label">Active Jobs</div><div class="metric-value">{df["job_name"].nunique()}</div></div>', unsafe_allow_html=True)
-        with col2: st.markdown(f'<div class="metric-card"><div class="metric-label">Pipeline Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
+        with col2: st.markdown(f'<div class="metric-card"><div class="metric-label">Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
         with col3:
             books = df[df['ups'] == 1]['job_name'].nunique()
             st.markdown(f'<div class="metric-card"><div class="metric-label">Book Projects</div><div class="metric-value">{books}</div></div>', unsafe_allow_html=True)
@@ -195,7 +195,7 @@ with tab_plan:
     with col_in:
         st.markdown('<div class="planner-card">', unsafe_allow_html=True)
         job_name = st.text_input("Project Description")
-        sales_rep = st.selectbox("Sales Lead", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam"])
+        sales_rep = st.selectbox("Sales Lead", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam", "Mohammed Seidu"])
         prod_cat = st.selectbox("Category", ["📦 Skillet / Box", "📚 Book / Brochure", "📄 Flyer"])
         c1, c2, c3 = st.columns(3)
         order_qty = c1.number_input("Units", value=10000, step=1000)
