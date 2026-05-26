@@ -8,7 +8,7 @@ import plotly.express as px
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Appointed Time | Enterprise Production Suite", 
+    page_title="Appointed Time Printing Ltd. | Enterprise Production Suite", 
     layout="wide", 
     page_icon="🏢",
     initial_sidebar_state="collapsed"
