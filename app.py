@@ -328,7 +328,7 @@ with tab_plan:
     with col_in:
         st.markdown('<div class="planner-card">', unsafe_allow_html=True)
         job_name = st.text_input("Project Description / Customer ID", placeholder="e.g. NUTRIFOODS Carton Run")
-        sales_rep = st.selectbox("Sales Executive Lead", ["Isaac Kum","Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam", "Mohammed Seidu"])
+        sales_rep = st.selectbox("Sales Executive Lead", ["Mabel Ampofo", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam", "Mohammed Seidu"])
         prod_cat = st.selectbox("Production Layout Category", ["📦 Skillet / Box Packing", "📚 Book / Magazine Brochure", "📄 Flat Sheet Flyer"])
         
         c1, c2, c3 = st.columns(3)
@@ -385,11 +385,11 @@ with tab_control:
         
         st.markdown('<div class="section-header">⌛ Master Production Queue Flowchart (Gantt Chart)</div>', unsafe_allow_html=True)
         
-        # Build premium high-contrast Gantt chart tracking the layout
+        # Fixed palette from Tealrose to Prism for enterprise color layout safety
         fig = px.timeline(
             df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
             hover_data=["tracking_id", "impressions"], template="plotly_white", 
-            color_discrete_sequence=px.colors.qualitative.Tealrose
+            color_discrete_sequence=px.colors.qualitative.Prism
         )
         fig.update_layout(
             height=480, 
