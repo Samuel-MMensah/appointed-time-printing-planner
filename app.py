@@ -21,17 +21,17 @@ MACHINE_DATA = {
     'SM102-P FIVE COLOUR': {'rate': 7500, 'setup_hours': 1.5},
     'SM 52': {'rate': 7000, 'setup_hours': 1.5},
     'GTO 52 SEMI-AUTO-2 COLOUR': {'rate': 4500, 'setup_hours': 1.5},
-    'GTO 52 MANUAL-2 COLOUR': {'rate': 4000, 'setup_hours': 2.0},  # 2 hours setup [cite: 71]
+    'GTO 52 MANUAL-2 COLOUR': {'rate': 4000, 'setup_hours': 2.0},
     'FOLDING UNIT (CONTINUOUS)': {'rate': 8000, 'setup_hours': 1.5},
     'MBO-B30E (SINGLE FOLD)': {'rate': 16000, 'setup_hours': 1.5},
     'PERFECT BINDING': {'rate': 500, 'setup_hours': 1.5},
     'SADDLE STITCHER': {'rate': 1000, 'setup_hours': 1.5},
-    'POLAR CUTTER (BOOKS)': {'rate': 2000, 'setup_hours': 1.0},    # 1 hour setup [cite: 127]
-    'POLAR CUTTER (SHEETS)': {'rate': 50000, 'setup_hours': 1.0},  # 1 hour setup [cite: 141]
-    '3 WAY TRIMMER': {'rate': 5000, 'setup_hours': 1.0},           # 1 hour setup [cite: 155]
+    'POLAR CUTTER (BOOKS)': {'rate': 2000, 'setup_hours': 1.0},
+    'POLAR CUTTER (SHEETS)': {'rate': 50000, 'setup_hours': 1.0},
+    '3 WAY TRIMMER': {'rate': 5000, 'setup_hours': 1.0},
     'LAMINATION UNIT': {'rate': 2500, 'setup_hours': 1.5},
-    'DIE CUTTER': {'rate': 3000, 'setup_hours': 1.5},              # [cite: 219, 220]
-    'FOLDER GLUER': {'rate': 12000, 'setup_hours': 1.5},           # [cite: 237, 238]
+    'DIE CUTTER': {'rate': 3000, 'setup_hours': 1.5},
+    'FOLDER GLUER': {'rate': 12000, 'setup_hours': 1.5},
     'CANON DIGITAL C10000': {'rate': 6000, 'setup_hours': 0.5},
     'CANON DIGITAL C800': {'rate': 4000, 'setup_hours': 0.5},
 }
@@ -79,7 +79,7 @@ def apply_calendar_bounds(dt):
         dt = dt.replace(hour=SHIFT_START_HOUR, minute=0, second=0, microsecond=0)
     elif dt.hour >= SHIFT_END_HOUR:
         dt = (dt + timedelta(days=1)).replace(hour=SHIFT_START_HOUR, minute=0, second=0, microsecond=0)
-    while dt.weekday() in [5, 6]:  # Saturday/Sunday safety net
+    while dt.weekday() in [5, 6]:
         dt = (dt + timedelta(days=1)).replace(hour=SHIFT_START_HOUR, minute=0, second=0, microsecond=0)
     return dt
 
@@ -93,7 +93,8 @@ def get_machine_next_available_time(machine_name, requested_start_dt):
     if m_df.empty:
         return apply_calendar_bounds(requested_start_dt)
     
-    m_df['finish_time'] = pd.to_datetime(m_df['finish_time'], utc=True)
+    # Fix potential mix-formatted ISO8601 string conversions from Supabase
+    m_df['finish_time'] = pd.to_datetime(m_df['finish_time'], utc=True, format='mixed')
     max_finish = m_df['finish_time'].max().to_pydatetime()
     
     return apply_calendar_bounds(max_finish) if max_finish > requested_start_dt else apply_calendar_bounds(requested_start_dt)
@@ -201,12 +202,12 @@ def add_multi_part_job(job_data):
         for r in records: supabase.table('jobs').insert(r).execute()
 
 # --- 5. MANAGEMENT & PLANNING USER INTERFACE ---
-tab_dash, tab_plan, tab_control = st.tabs(["🏛 *COMMAND CENTER*", "⚙ *PRODUCTION PLANNER*", "📅 *SHOP FLOOR CONTROL*"])
+tab_dash, tab_plan, tab_control = st.tabs(["🏛 COMMAND CENTER", "⚙ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
 
 with tab_dash:
     df = get_db_jobs()
     if not df.empty:
-        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True, format='mixed')
         col1, col2, col3, col4 = st.columns(4)
         with col1: st.markdown(f'<div class="metric-card"><div class="metric-label">Active Tracked Runs</div><div class="metric-value">{df["tracking_id"].nunique()}</div></div>', unsafe_allow_html=True)
         with col2: st.markdown(f'<div class="metric-card"><div class="metric-label">Pipeline Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.0f}</div></div>', unsafe_allow_html=True)
@@ -275,8 +276,8 @@ with tab_plan:
 with tab_control:
     df = get_db_jobs()
     if not df.empty:
-        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
-        df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True)
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True, format='mixed')
+        df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True, format='mixed')
         st.markdown('<p class="section-header">⌛ Live Finite Capacity Timeline</p>', unsafe_allow_html=True)
         
         fig = px.timeline(df, x_start="start_time", x_end="finish_time", y="machine", color="job_name", 
