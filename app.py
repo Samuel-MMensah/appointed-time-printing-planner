@@ -285,7 +285,7 @@ def add_multi_part_job(job_data):
         for r in records: supabase.table('jobs').insert(r).execute()
 
 # --- 5. ENTERPRISE CONTROLS & MANAGEMENT INTERFACE ---
-st.markdown('<div class="main-title">Appointed Time</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Appointed Time Printing Ltd.</div>', unsafe_allow_html=True)
 st.markdown('<div class="main-subtitle">Commercial Print Scheduling Engine & Finite Capacity Queue Manager</div>', unsafe_allow_html=True)
 
 tab_dash, tab_plan, tab_control = st.tabs(["🏛 COMMAND CENTER", "⚙ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
