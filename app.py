@@ -64,7 +64,6 @@ st.markdown("""
 
 @st.cache_resource
 def init_supabase():
-    """Secure injection validation wrapper for client initialization."""
     try:
         url = st.secrets.get("SUPABASE_URL")
         key = st.secrets.get("SUPABASE_KEY")
@@ -78,15 +77,25 @@ def init_supabase():
 supabase: Client = init_supabase()
 
 def sanitize_string(input_str):
-    """Prevents XSS or malicious field script injections inside text inputs."""
     return re.sub(r'[^\w\s\-\(\)\.\,\/]', '', input_str).strip()
 
 def get_db_jobs():
-    """Queries safe records. Implicitly locked down under database level RLS."""
     if not supabase or not st.session_state.get("authenticated"): 
         return pd.DataFrame()
     try:
         res = supabase.table('jobs').select("*").execute()
+        return pd.DataFrame(res.data)
+    except Exception:
+        return pd.DataFrame()
+
+def get_db_job_orders(status_filter=None):
+    if not supabase or not st.session_state.get("authenticated"):
+        return pd.DataFrame()
+    try:
+        query = supabase.table('job_orders').select("*")
+        if status_filter:
+            query = query.eq('status', status_filter)
+        res = query.execute()
         return pd.DataFrame(res.data)
     except Exception:
         return pd.DataFrame()
@@ -218,7 +227,6 @@ with st.sidebar:
             
             if login_btn and supabase:
                 try:
-                    # Authenticate directly via Supabase GoTrue identities
                     auth_res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     if auth_res.user:
                         st.session_state.authenticated = True
@@ -239,8 +247,15 @@ else:
     st.markdown('<div class="main-title">Appointed Time Printing Ltd.</div>', unsafe_allow_html=True)
     st.markdown('<div class="main-subtitle">Secured Capacity Planning Engine</div>', unsafe_allow_html=True)
 
-    tab_dash, tab_plan, tab_control = st.tabs(["🏛 COMMAND CENTER", "⚙ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"])
+    # Automatically map application navigation tabs based on user authorization profiles
+    user_email = st.session_state.user_email.lower()
+    is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"])
+    is_frontdesk = "frontdesk" in user_email
 
+    tab_list = ["🏛 COMMAND CENTER", "📋 RAISE JOB ORDER", "👑 AUTHORIZATION CENTER", "⚙ PRODUCTION PLANNER", "📅 SHOP FLOOR CONTROL"]
+    tab_dash, tab_raise, tab_auth, tab_plan, tab_control = st.tabs(tab_list)
+
+    # --- TAB A: COMMAND CENTER ---
     with tab_dash:
         df = get_db_jobs()
         if not df.empty:
@@ -270,63 +285,200 @@ else:
         else:
             st.info("No active machine runs detected in the live database pipeline.")
 
-    with tab_plan:
-        st.markdown('<div class="section-header">⚙ Architecture Layout Builder</div>', unsafe_allow_html=True)
-        col_in, col_sum = st.columns([2, 1])
-        
-        with col_in:
-            st.markdown('<div class="planner-card">', unsafe_allow_html=True)
-            raw_job_name = st.text_input("Project Description / Customer ID", placeholder="e.g. NUTRIFOODS Carton Run")
-            job_name = sanitize_string(raw_job_name) # XSS protection wrapper
+    # --- TAB B: RAISE JOB ORDER (FRONT DESK VIEW) ---
+    with tab_raise:
+        st.markdown('<div class="section-header">📋 Press Job Order Entry Form</div>', unsafe_allow_html=True)
+        with st.form("raise_order_form"):
+            c1, c2 = st.columns(2)
+            c_name = c1.text_input("Customer Name *")
+            c_phone = c2.text_input("Telephone Number")
             
-            sales_rep = st.selectbox("Sales Executive Lead", ["Mabel Ampofo", "Isaac Kum", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam", "Mohammed Seidu"])
-            prod_cat = st.selectbox("Production Layout Category", ["📦 Skillet / Box Packing", "📚 Book / Magazine Brochure", "📄 Flat Sheet Flyer"])
+            j_desc = st.text_area("Job Description")
             
-            c1, c2, c3 = st.columns(3)
-            order_qty = c1.number_input("Target Order Units", value=10000, step=1000)
-            total_val = c2.number_input(f"Total Contract Value ({CURRENCY})", value=5000.0, step=500.0)
-            ups = c3.number_input("Ups Per Print Sheet Layout", value=10, min_value=1)
+            f1, f2, f3 = st.columns(3)
+            t_amt = f1.number_input(f"Total Amount ({CURRENCY})", min_value=0.0, step=100.0)
+            d_amt = f2.number_input(f"Deposit Amount ({CURRENCY})", min_value=0.0, step=100.0)
+            b_due = f3.date_input("Balance Due Date")
             
-            if "Book" in prod_cat:
-                type_id, pgs = 1, st.number_input("Total Page Count", value=64, min_value=1)
-                sig = st.selectbox("Signature Form Factor", [8, 16, 32], index=1)
-                text_imps = math.ceil(pgs/sig) * order_qty
-                r1, r2, r3 = st.columns(3)
-                comp = [
-                    {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Asset Configuration", list(MACHINE_DATA.keys()))},
-                    {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Asset Configuration", list(MACHINE_DATA.keys()))}
-                ]
-                fin_route = r3.multiselect("Finishing Layout Line", list(MACHINE_DATA.keys()))
-            else:
-                type_id = ups 
-                r1, r2 = st.columns(2)
-                comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Asset Configuration", list(MACHINE_DATA.keys()))}]
-                fin_route = r2.multiselect("Finishing Component Line Sequence", list(MACHINE_DATA.keys()))
-            st.markdown('</div>', unsafe_allow_html=True)
+            p1, p2, p3 = st.columns(3)
+            q_print = p1.number_input("Quantity to Print *", min_value=1, value=1000, step=500)
+            t_print = p2.selectbox("Type of Print", ["OFFSET", "DIGITAL PRESS", "PACKAGING"])
+            m_source = p3.selectbox("Material Source", ["COMPANY MATERIAL", "CUSTOMER MATERIAL"])
             
-        with col_sum:
-            st.markdown('<div class="summary-box">', unsafe_allow_html=True)
-            st.markdown("<p style='font-size:1.25rem; font-weight:700; margin-top:0;'>🚀 Deployment Controls</p>", unsafe_allow_html=True)
-            start_date = st.date_input("Target Production Start Date", min_value=datetime.today().date())
+            st.markdown("#### Technical Parameters & Spec Sheets")
+            s1, s2, s3, s4 = st.columns(4)
+            p_size = s1.text_input("Print Size (e.g. A1, A3)", value="A3")
+            f_size = s2.text_input("Finished Print Size", value="A4")
+            pap_type = s3.text_input("Paper Type", value="Bond")
+            pap_gsm = s4.text_input("GSM (Weight)", value="150gsm")
             
-            st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
-            st.markdown(f"**Target Units:** {order_qty:,}")
-            st.markdown(f"**Combined Value:** {CURRENCY}{total_val:,.2f}")
+            o1, o2, o3, o4 = st.columns(4)
+            pap_size = o1.text_input("Paper Size stock", value="24x36")
+            pap_col = o2.text_input("Paper Colour", value="White")
+            imp_col = o3.selectbox("Impressions Ink Colour", ["1 colour", "2 colour", "3 colour", "4 colour"])
+            d_mode = o4.selectbox("Delivery Mode", ["COMPANY DELIVERY", "CUSTOMER PICK-UP"])
+            
+            st.markdown("#### Finishing & Enhancements Processing")
+            b_type = st.multiselect("Binding Selection", ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"])
+            l_type = st.multiselect("Laminating Selection", ["Gloss Laminating", "Matt Laminating", "Soft Touch", "UV-Varnish"])
+            c_date = st.date_input("Target Date of Collection")
             
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("DISPATCH TO FINITE QUEUES", use_container_width=True):
-                if job_name and fin_route and any(c['machines'] for c in comp):
-                    add_multi_part_job({
-                        "name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, 
-                        "total_val": total_val, "start_date": start_date, "type_id": type_id, 
-                        "components": comp, "finishing_machines": fin_route
-                    })
-                    st.success("Successfully injected into floor scheduling buffers!")
-                    st.rerun()
-                else: 
-                    st.error("Validation failed: Verify job text fields and assets are assigned.")
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.info(f"✍️ **Job Order Handled By:** {st.session_state.user_email} | **Filling Date:** {datetime.now().strftime('%Y-%m-%d')}")
+            
+            submit_order = st.form_submit_button("SUBMIT FOR MANAGEMENT APPROVAL", use_container_width=True)
+            if submit_order:
+                if c_name and q_print:
+                    order_payload = {
+                        "customer_name": sanitize_string(c_name),
+                        "telephone_number": sanitize_string(c_phone),
+                        "job_description": sanitize_string(j_desc),
+                        "total_amount": float(t_amt),
+                        "deposit_amount": float(d_amt),
+                        "balance_due_date": b_due.isoformat(),
+                        "date_of_collection": c_date.isoformat(),
+                        "qty_to_print": int(q_print),
+                        "type_of_print": t_print,
+                        "material_source": m_source,
+                        "print_size": sanitize_string(p_size),
+                        "finished_print_size": sanitize_string(f_size),
+                        "paper_type": sanitize_string(pap_type),
+                        "gsm": sanitize_string(pap_gsm),
+                        "paper_size": sanitize_string(pap_size),
+                        "paper_colour": sanitize_string(pap_col),
+                        "impressions_colour": imp_col,
+                        "binding_type": ", ".join(b_type),
+                        "laminating_type": ", ".join(l_type),
+                        "delivery_mode": d_mode,
+                        "created_by": st.session_state.user_email,
+                        "status": "Pending Approval"
+                    }
+                    try:
+                        supabase.table('job_orders').insert(order_payload).execute()
+                        st.success("Job order has been successfully logged and sent to Management for validation.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error saving order: {str(e)}")
+                else:
+                    st.error("Validation Error: Please fill in mandatory fields (Customer Name & Quantity).")
 
+    # --- TAB C: AUTHORIZATION CENTER (MD/FM VIEW LOCK) ---
+    with tab_auth:
+        st.markdown('<div class="section-header">👑 Executive Authorization Control Panel</div>', unsafe_allow_html=True)
+        if not is_admin:
+            st.warning("Access Denied: This tab is locked to Managing Director (MD) and Finance Manager (FM) sessions.")
+        else:
+            orders_df = get_db_job_orders("Pending Approval")
+            if orders_df.empty:
+                st.success("All clear! No pending jobs require executive sign-off.")
+            else:
+                for _, row in orders_df.iterrows():
+                    with st.expander(f"📋 Order No: {row['job_order_no']} — Client: {row['customer_name']} ({row['type_of_print']})"):
+                        col1, col2, col3 = st.columns(3)
+                        col1.markdown(f"**Target Qty:** {row['qty_to_print']:,}")
+                        col2.markdown(f"**Total Value:** {CURRENCY}{row['total_amount']:,.2f}")
+                        col3.markdown(f"**Deposit Paid:** {CURRENCY}{row['deposit_amount']:,.2f}")
+                        
+                        st.text(f"Specs: {row['paper_type']} {row['gsm']} | Binding: {row['binding_type']}")
+                        st.markdown(f"_Submitted by front desk agent:_ `{row['created_by']}`")
+                        
+                        btn_approve, btn_reject = st.columns(2)
+                        if btn_approve.button("APPROVE & ACTIVATE", key=f"app_{row['id']}", use_container_width=True):
+                            try:
+                                supabase.table('job_orders').update({
+                                    "status": "Approved",
+                                    "approved_by": st.session_state.user_email,
+                                    "approved_at": datetime.now(timezone.utc).isoformat()
+                                }).eq('id', row['id']).execute()
+                                st.success("Job order released to active plant production queues!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed status transition: {str(e)}")
+                        
+                        if btn_reject.button("REJECT / DISCARD", key=f"rej_{row['id']}", use_container_width=True, type="secondary"):
+                            try:
+                                supabase.table('job_orders').delete().eq('id', row['id']).execute()
+                                st.warning("Order discarded.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed deletion request: {str(e)}")
+
+    # --- TAB D: PRODUCTION PLANNER (CONSUMES APPROVED ORDERS) ---
+    with tab_plan:
+        st.markdown('<div class="section-header">⚙ Architecture Layout Builder</div>', unsafe_allow_html=True)
+        
+        # Pull only valid approved client forms
+        approved_orders = get_db_job_orders("Approved")
+        
+        if approved_orders.empty:
+            st.info("No approved job contracts are currently waiting to be scheduled on assets.")
+        else:
+            col_in, col_sum = st.columns([2, 1])
+            with col_in:
+                st.markdown('<div class="planner-card">', unsafe_allow_html=True)
+                
+                # Dynamic matching selector dropdown
+                order_options = approved_orders.apply(lambda r: f"{r['job_order_no']} | {r['customer_name']} ({r['qty_to_print']:,} units)", axis=1).tolist()
+                selected_option = st.selectbox("Select Approved Release Order Contract", order_options)
+                
+                # Extract corresponding database row index
+                selected_idx = order_options.index(selected_option)
+                matched_order = approved_orders.iloc[selected_idx]
+                
+                # Auto-fill configuration blocks directly from form parameters
+                job_name = f"{matched_order['job_order_no']} - {matched_order['customer_name']}"
+                st.text_input("Project Label ID (Auto-populated)", value=job_name, disabled=True)
+                
+                sales_rep = st.selectbox("Sales Executive Lead", ["Mabel Ampofo", "Isaac Kum", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam", "Mohammed Seidu"])
+                prod_cat = st.selectbox("Production Layout Category", ["📦 Skillet / Box Packing", "📚 Book / Magazine Brochure", "📄 Flat Sheet Flyer"])
+                
+                c1, c2, c3 = st.columns(3)
+                order_qty = c1.number_input("Target Order Units", value=int(matched_order['qty_to_print']), disabled=True)
+                total_val = c2.number_input(f"Total Contract Value ({CURRENCY})", value=float(matched_order['total_amount']), disabled=True)
+                ups = c3.number_input("Ups Per Print Sheet Layout", value=10, min_value=1)
+                
+                if "Book" in prod_cat:
+                    type_id, pgs = 1, st.number_input("Total Page Count", value=64, min_value=1)
+                    sig = st.selectbox("Signature Form Factor", [8, 16, 32], index=1)
+                    text_imps = math.ceil(pgs/sig) * order_qty
+                    r1, r2, r3 = st.columns(3)
+                    comp = [
+                        {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Asset Configuration", list(MACHINE_DATA.keys()))},
+                        {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Asset Configuration", list(MACHINE_DATA.keys()))}
+                    ]
+                    fin_route = r3.multiselect("Finishing Layout Line", list(MACHINE_DATA.keys()))
+                else:
+                    type_id = ups 
+                    r1, r2 = st.columns(2)
+                    comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Asset Configuration", list(MACHINE_DATA.keys()))}]
+                    fin_route = r2.multiselect("Finishing Component Line Sequence", list(MACHINE_DATA.keys()))
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            with col_sum:
+                st.markdown('<div class="summary-box">', unsafe_allow_html=True)
+                st.markdown("<p style='font-size:1.25rem; font-weight:700; margin-top:0;'>🚀 Deployment Controls</p>", unsafe_allow_html=True)
+                start_date = st.date_input("Target Production Start Date", min_value=datetime.today().date())
+                
+                st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
+                st.markdown(f"**Target Units:** {order_qty:,}")
+                st.markdown(f"**Combined Value:** {CURRENCY}{total_val:,.2f}")
+                st.markdown(f"**Authorized By:** `{matched_order['approved_by']}`")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("DISPATCH TO FINITE QUEUES", use_container_width=True):
+                    if job_name and fin_route and any(c['machines'] for c in comp):
+                        add_multi_part_job({
+                            "name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, 
+                            "total_val": total_val, "start_date": start_date, "type_id": type_id, 
+                            "components": comp, "finishing_machines": fin_route
+                        })
+                        st.success("Successfully injected into floor scheduling buffers!")
+                        st.rerun()
+                    else: 
+                        st.error("Validation failed: Verify layout routing paths are explicitly assigned.")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- TAB E: SHOP FLOOR CONTROL ---
     with tab_control:
         df = get_db_jobs()
         if not df.empty:
@@ -367,10 +519,9 @@ else:
                     c_void, c_act = st.columns([5, 1])
                     if c_act.button(f"Scrap Component Run {tid}", key=f"scrap_{tid}", use_container_width=True, type="secondary"):
                         try:
-                            # Safely deletes records under RLS authorization constraints
                             supabase.table('jobs').delete().eq('tracking_id', tid).execute()
                             st.rerun()
                         except Exception as e:
-                            st.error("Action denied: Account holds insufficient RLS delete rights.")
+                            st.error("Action denied: Account holds insufficient RLS rights.")
         else:
             st.info("No scheduled manufacturing runs are running on the factory shop floor.")
