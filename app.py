@@ -59,8 +59,8 @@ st.markdown("""
     .stTabs [aria-selected="true"] { background-color: #ffffff !important; color: #0f172a !important; }
     
     /* Technical Blueprint Ticket Styles */
-    .ticket-container { background-color: #fafafa; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
-    .ticket-title { font-size: 0.85rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.25rem; }
+    .ticket-container { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
+    .ticket-title { font-size: 0.85rem; font-weight: 700; color: #0f172a; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.25rem; }
     .ticket-field { font-size: 0.85rem; color: #334155; margin-bottom: 0.35rem; }
     .ticket-label { font-weight: 600; color: #64748b; }
     </style>
@@ -253,7 +253,6 @@ else:
     st.markdown('<div class="main-title">Appointed Time Printing Ltd.</div>', unsafe_allow_html=True)
     st.markdown('<div class="main-subtitle">Secured Capacity Planning Engine</div>', unsafe_allow_html=True)
 
-    # Automatically map application navigation tabs based on user authorization profiles
     user_email = st.session_state.user_email.lower()
     is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"])
     is_frontdesk = "frontdesk" in user_email
@@ -291,7 +290,7 @@ else:
         else:
             st.info("No active machine runs detected in the live database pipeline.")
 
-    # --- TAB B: RAISE JOB ORDER (FRONT DESK VIEW) ---
+    # --- TAB B: RAISE JOB ORDER ---
     with tab_raise:
         st.markdown('<div class="section-header">📋 Press Job Order Entry Form</div>', unsafe_allow_html=True)
         with st.form("raise_order_form"):
@@ -368,7 +367,7 @@ else:
                 else:
                     st.error("Validation Error: Please fill in mandatory fields (Customer Name & Quantity).")
 
-    # --- TAB C: AUTHORIZATION CENTER (MD/FM VIEW LOCK) ---
+    # --- TAB C: AUTHORIZATION CENTER ---
     with tab_auth:
         st.markdown('<div class="section-header">👑 Executive Authorization Control Panel</div>', unsafe_allow_html=True)
         if not is_admin:
@@ -409,96 +408,138 @@ else:
                             except Exception as e:
                                 st.error(f"Failed deletion request: {str(e)}")
 
-    # --- TAB D: PRODUCTION PLANNER (CONSUMES APPROVED ORDERS) ---
+    # --- TAB D: PRODUCTION PLANNER (HISTORICAL VAULT MATRIX AND QUEUE GENERATOR) ---
     with tab_plan:
-        st.markdown('<div class="section-header">⚙ Architecture Layout Builder</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">⚙ Architecture Layout Builder & Order Archive</div>', unsafe_allow_html=True)
         
-        # Pull only valid approved client forms
         approved_orders = get_db_job_orders("Approved")
         
         if approved_orders.empty:
             st.info("No approved job contracts are currently waiting to be scheduled on assets.")
         else:
+            # SEARCH BLOCK FOR THE PRODUCTION TEAM
+            st.markdown("### 🔍 Enterprise Archive Search Engine")
+            search_query = st.text_input("Filter historical database ledger by Order Number or Client Name:", "").strip().lower()
+            
+            # Apply instant logical mask matching against historical records
+            if search_query:
+                filtered_orders = approved_orders[
+                    approved_orders['job_order_no'].astype(str).str.lower().str.contains(search_query) |
+                    approved_orders['customer_name'].str.lower().str.contains(search_query)
+                ]
+            else:
+                filtered_orders = approved_orders
+
+            # FORMAT PASSTHROUGH TABLE VIEW FOR ARCHIVAL COMPLIANCE
+            view_matrix = filtered_orders.copy()
+            if not view_matrix.empty:
+                view_matrix['Total Amount'] = view_matrix['total_amount'].apply(lambda x: f"{CURRENCY}{x:,.2f}")
+                view_matrix['Deposit'] = view_matrix['deposit_amount'].apply(lambda x: f"{CURRENCY}{x:,.2f}")
+                view_matrix = view_matrix.rename(columns={
+                    'job_order_no': 'Order No',
+                    'customer_name': 'Customer Name',
+                    'qty_to_print': 'Print Qty',
+                    'type_of_print': 'Category',
+                    'paper_type': 'Paper Stock',
+                    'gsm': 'GSM',
+                    'impressions_colour': 'Ink Config',
+                    'approved_by': 'Authorized Manager'
+                })
+                
+                # Render immutable, clean read-only data grid matrix
+                st.dataframe(
+                    view_matrix[['Order No', 'Customer Name', 'Print Qty', 'Category', 'Paper Stock', 'GSM', 'Ink Config', 'Total Amount', 'Deposit', 'Authorized Manager']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.warning("No structural matches found for that query inside the approved historical ledger index.")
+
+            st.markdown("<hr style='border-color: #cbd5e1; margin: 2rem 0;'>", unsafe_allow_html=True)
+
             col_in, col_sum = st.columns([2, 1])
             with col_in:
                 st.markdown('<div class="planner-card">', unsafe_allow_html=True)
+                st.markdown("#### 🎯 Active Deployment Focus Target")
                 
-                # Dynamic matching selector dropdown
-                order_options = approved_orders.apply(lambda r: f"{r['job_order_no']} | {r['customer_name']} ({r['qty_to_print']:,} units)", axis=1).tolist()
-                selected_option = st.selectbox("Select Approved Release Order Contract", order_options)
+                # Active Dynamic Choice Sync Dropdown
+                order_options = filtered_orders.apply(lambda r: f"{r['job_order_no']} | {r['customer_name']} ({r['qty_to_print']:,} units)", axis=1).tolist() if not filtered_orders.empty else []
                 
-                # Extract corresponding database row index
-                selected_idx = order_options.index(selected_option)
-                matched_order = approved_orders.iloc[selected_idx]
-                
-                # Auto-fill configuration blocks directly from form parameters
-                job_name = f"{matched_order['job_order_no']} - {matched_order['customer_name']}"
-                st.text_input("Project Label ID (Auto-populated)", value=job_name, disabled=True)
-                
-                sales_rep = st.selectbox("Sales Executive Lead", ["Mabel Ampofo", "Isaac Kum", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam", "Mohammed Seidu"])
-                prod_cat = st.selectbox("Production Layout Category", ["📦 Skillet / Box Packing", "📚 Book / Magazine Brochure", "📄 Flat Sheet Flyer"])
-                
-                c1, c2, c3 = st.columns(3)
-                order_qty = c1.number_input("Target Order Units", value=int(matched_order['qty_to_print']), disabled=True)
-                total_val = c2.number_input(f"Total Contract Value ({CURRENCY})", value=float(matched_order['total_amount']), disabled=True)
-                ups = c3.number_input("Ups Per Print Sheet Layout", value=10, min_value=1)
-                
-                if "Book" in prod_cat:
-                    type_id, pgs = 1, st.number_input("Total Page Count", value=64, min_value=1)
-                    sig = st.selectbox("Signature Form Factor", [8, 16, 32], index=1)
-                    text_imps = math.ceil(pgs/sig) * order_qty
-                    r1, r2, r3 = st.columns(3)
-                    comp = [
-                        {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Asset Configuration", list(MACHINE_DATA.keys()))},
-                        {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Asset Configuration", list(MACHINE_DATA.keys()))}
-                    ]
-                    fin_route = r3.multiselect("Finishing Layout Line", list(MACHINE_DATA.keys()))
+                if order_options:
+                    selected_option = st.selectbox("Focus target for capacity mapping sequence:", order_options)
+                    selected_idx = order_options.index(selected_option)
+                    matched_order = filtered_orders.iloc[selected_idx]
+                    
+                    job_name = f"{matched_order['job_order_no']} - {matched_order['customer_name']}"
+                    st.text_input("Project Label ID (Auto-populated)", value=job_name, disabled=True)
+                    
+                    sales_rep = st.selectbox("Sales Executive Lead", ["Mabel Ampofo", "Isaac Kum", "Daphne Sarpong", "Elizabeth Akoto", "Charles Adoo", "Christian Mante", "Bertha Tackie", "Reginald Aidam", "Mohammed Seidu"])
+                    prod_cat = st.selectbox("Production Layout Category", ["📦 Skillet / Box Packing", "📚 Book / Magazine Brochure", "📄 Flat Sheet Flyer"])
+                    
+                    c1, c2, c3 = st.columns(3)
+                    order_qty = c1.number_input("Target Order Units", value=int(matched_order['qty_to_print']), disabled=True)
+                    total_val = c2.number_input(f"Total Contract Value ({CURRENCY})", value=float(matched_order['total_amount']), disabled=True)
+                    ups = c3.number_input("Ups Per Print Sheet Layout", value=10, min_value=1)
+                    
+                    if "Book" in prod_cat:
+                        type_id, pgs = 1, st.number_input("Total Page Count", value=64, min_value=1)
+                        sig = st.selectbox("Signature Form Factor", [8, 16, 32], index=1)
+                        text_imps = math.ceil(pgs/sig) * order_qty
+                        r1, r2, r3 = st.columns(3)
+                        comp = [
+                            {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Asset Configuration", list(MACHINE_DATA.keys()))},
+                            {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Asset Configuration", list(MACHINE_DATA.keys()))}
+                        ]
+                        fin_route = r3.multiselect("Finishing Layout Line", list(MACHINE_DATA.keys()))
+                    else:
+                        type_id = ups 
+                        r1, r2 = st.columns(2)
+                        comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Asset Configuration", list(MACHINE_DATA.keys()))}]
+                        fin_route = r2.multiselect("Finishing Component Line Sequence", list(MACHINE_DATA.keys()))
                 else:
-                    type_id = ups 
-                    r1, r2 = st.columns(2)
-                    comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Asset Configuration", list(MACHINE_DATA.keys()))}]
-                    fin_route = r2.multiselect("Finishing Component Line Sequence", list(MACHINE_DATA.keys()))
+                    st.info("Select or filter an active record row inside the ledger grid above.")
                 st.markdown('</div>', unsafe_allow_html=True)
                 
             with col_sum:
-                # --- NEW FEATURE: DIGITAL TECHNICAL WORK TICKET TICKET REFERENCE DESK ---
-                st.markdown(f"""
-                <div class="ticket-container">
-                    <div class="ticket-title">📋 Production Work Ticket Blueprint</div>
-                    <div class="ticket-field"><span class="ticket-label">Job Num:</span> {matched_order['job_order_no']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Format:</span> {matched_order['type_of_print']} | {matched_order['material_source']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Description:</span> {matched_order['job_description'] if matched_order['job_description'] else 'No special description provided.'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Print Size:</span> {matched_order['print_size']} (Trimmed: {matched_order['finished_print_size']})</div>
-                    <div class="ticket-field"><span class="ticket-label">Stock Required:</span> {matched_order['paper_type']} | {matched_order['gsm']} | Size: {matched_order['paper_size']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Colors / Ink:</span> {matched_order['paper_colour']} Paper — {matched_order['impressions_colour']} Run</div>
-                    <div class="ticket-field"><span class="ticket-label">Finishing Bind:</span> {matched_order['binding_type'] if matched_order['binding_type'] else 'None'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Lamination Spec:</span> {matched_order['laminating_type'] if matched_order['laminating_type'] else 'None'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Delivery Target:</span> {matched_order['delivery_mode']} by {matched_order['date_of_collection']}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                if order_options:
+                    # RENDER DETAILED SPECS VIEW SIDEBAR-CARD INSTANTLY ON SELECTED focus TARGET
+                    st.markdown(f"""
+                    <div class="ticket-container">
+                        <div class="ticket-title">📋 Production Work Ticket Blueprint</div>
+                        <div class="ticket-field"><span class="ticket-label">Job Num:</span> {matched_order['job_order_no']}</div>
+                        <div class="ticket-field"><span class="ticket-label">Format:</span> {matched_order['type_of_print']} | {matched_order['material_source']}</div>
+                        <div class="ticket-field"><span class="ticket-label">Description:</span> {matched_order['job_description'] if matched_order['job_description'] else 'No special description provided.'}</div>
+                        <div class="ticket-field"><span class="ticket-label">Print Size:</span> {matched_order['print_size']} (Trimmed: {matched_order['finished_print_size']})</div>
+                        <div class="ticket-field"><span class="ticket-label">Stock Required:</span> {matched_order['paper_type']} | {matched_order['gsm']} | Size: {matched_order['paper_size']}</div>
+                        <div class="ticket-field"><span class="ticket-label">Colors / Ink:</span> {matched_order['paper_colour']} Paper — {matched_order['impressions_colour']} Run</div>
+                        <div class="ticket-field"><span class="ticket-label">Finishing Bind:</span> {matched_order['binding_type'] if matched_order['binding_type'] else 'None'}</div>
+                        <div class="ticket-field"><span class="ticket-label">Lamination Spec:</span> {matched_order['laminating_type'] if matched_order['laminating_type'] else 'None'}</div>
+                        <div class="ticket-field"><span class="ticket-label">Delivery Target:</span> {matched_order['delivery_mode']} by {matched_order['date_of_collection']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                st.markdown('<div class="summary-box">', unsafe_allow_html=True)
-                st.markdown("<p style='font-size:1.25rem; font-weight:700; margin-top:0;'>🚀 Deployment Controls</p>", unsafe_allow_html=True)
-                start_date = st.date_input("Target Production Start Date", min_value=datetime.today().date())
-                
-                st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
-                st.markdown(f"**Target Units:** {order_qty:,}")
-                st.markdown(f"**Combined Value:** {CURRENCY}{total_val:,.2f}")
-                st.markdown(f"**Authorized By:** `{matched_order['approved_by']}`")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("DISPATCH TO FINITE QUEUES", use_container_width=True):
-                    if job_name and fin_route and any(c['machines'] for c in comp):
-                        add_multi_part_job({
-                            "name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, 
-                            "total_val": total_val, "start_date": start_date, "type_id": type_id, 
-                            "components": comp, "finishing_machines": fin_route
-                        })
-                        st.success("Successfully injected into floor scheduling buffers!")
-                        st.rerun()
-                    else: 
-                        st.error("Validation failed: Verify layout routing paths are explicitly assigned.")
-                st.markdown('</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="summary-box">', unsafe_allow_html=True)
+                    st.markdown("<p style='font-size:1.25rem; font-weight:700; margin-top:0;'>🚀 Deployment Controls</p>", unsafe_allow_html=True)
+                    start_date = st.date_input("Target Production Start Date", min_value=datetime.today().date())
+                    
+                    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
+                    st.markdown(f"**Target Units:** {order_qty:,}")
+                    st.markdown(f"**Combined Value:** {CURRENCY}{total_val:,.2f}")
+                    st.markdown(f"**Authorized By:** `{matched_order['approved_by']}`")
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("DISPATCH TO FINITE QUEUES", use_container_width=True):
+                        if job_name and fin_route and any(c['machines'] for c in comp):
+                            add_multi_part_job({
+                                "name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, 
+                                "total_val": total_val, "start_date": start_date, "type_id": type_id, 
+                                "components": comp, "finishing_machines": fin_route
+                            })
+                            st.success("Successfully injected into floor scheduling buffers!")
+                            st.rerun()
+                        else: 
+                            st.error("Validation failed: Verify layout routing paths are explicitly assigned.")
+                    st.markdown('</div>', unsafe_allow_html=True)
 
     # --- TAB E: SHOP FLOOR CONTROL ---
     with tab_control:
