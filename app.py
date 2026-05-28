@@ -57,10 +57,16 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background-color: #f1f5f9; padding: 6px; border-radius: 12px; }
     .stTabs [data-baseweb="tab"] { padding: 8px 16px; border-radius: 8px; color: #64748b; font-weight: 600; }
     .stTabs [aria-selected="true"] { background-color: #ffffff !important; color: #0f172a !important; }
+    
+    /* Technical Blueprint Ticket Styles */
+    .ticket-container { background-color: #fafafa; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
+    .ticket-title { font-size: 0.85rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.25rem; }
+    .ticket-field { font-size: 0.85rem; color: #334155; margin-bottom: 0.35rem; }
+    .ticket-label { font-weight: 600; color: #64748b; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. SECURED BACKEND SYSTEM CORNERSTORE ---
+# --- 4. SECURED BACKEND SYSTEM CORNERSTONE ---
 
 @st.cache_resource
 def init_supabase():
@@ -455,6 +461,22 @@ else:
                 st.markdown('</div>', unsafe_allow_html=True)
                 
             with col_sum:
+                # --- NEW FEATURE: DIGITAL TECHNICAL WORK TICKET TICKET REFERENCE DESK ---
+                st.markdown(f"""
+                <div class="ticket-container">
+                    <div class="ticket-title">📋 Production Work Ticket Blueprint</div>
+                    <div class="ticket-field"><span class="ticket-label">Job Num:</span> {matched_order['job_order_no']}</div>
+                    <div class="ticket-field"><span class="ticket-label">Format:</span> {matched_order['type_of_print']} | {matched_order['material_source']}</div>
+                    <div class="ticket-field"><span class="ticket-label">Description:</span> {matched_order['job_description'] if matched_order['job_description'] else 'No special description provided.'}</div>
+                    <div class="ticket-field"><span class="ticket-label">Print Size:</span> {matched_order['print_size']} (Trimmed: {matched_order['finished_print_size']})</div>
+                    <div class="ticket-field"><span class="ticket-label">Stock Required:</span> {matched_order['paper_type']} | {matched_order['gsm']} | Size: {matched_order['paper_size']}</div>
+                    <div class="ticket-field"><span class="ticket-label">Colors / Ink:</span> {matched_order['paper_colour']} Paper — {matched_order['impressions_colour']} Run</div>
+                    <div class="ticket-field"><span class="ticket-label">Finishing Bind:</span> {matched_order['binding_type'] if matched_order['binding_type'] else 'None'}</div>
+                    <div class="ticket-field"><span class="ticket-label">Lamination Spec:</span> {matched_order['laminating_type'] if matched_order['laminating_type'] else 'None'}</div>
+                    <div class="ticket-field"><span class="ticket-label">Delivery Target:</span> {matched_order['delivery_mode']} by {matched_order['date_of_collection']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
                 st.markdown('<div class="summary-box">', unsafe_allow_html=True)
                 st.markdown("<p style='font-size:1.25rem; font-weight:700; margin-top:0;'>🚀 Deployment Controls</p>", unsafe_allow_html=True)
                 start_date = st.date_input("Target Production Start Date", min_value=datetime.today().date())
