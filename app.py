@@ -463,7 +463,6 @@ else:
                     hide_index=True
                 )
                 
-                # --- NEW: Edit/Delete Administrative Controls for Ledger ---
                 if is_admin:
                     st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
                     st.markdown("### Manage Archived Orders")
@@ -495,7 +494,6 @@ else:
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"Deletion failed: {str(e)}")
-
             else:
                 st.warning("No secure ledger rows matched your query input inside the database.")
 
@@ -547,6 +545,7 @@ else:
                 st.markdown('</div>', unsafe_allow_html=True)
                 
             with col_sum:
+                # REPAIRED AND CLOSED F-STRING BLOCK
                 st.markdown(f"""
                 <div class="ticket-container">
                     <div class="ticket-title">Production Work Ticket Blueprint</div>
@@ -554,76 +553,46 @@ else:
                     <div class="ticket-field"><span class="ticket-label">Format:</span> {matched_order['type_of_print']} | {matched_order['material_source']}</div>
                     <div class="ticket-field"><span class="ticket-label">Description:</span> {matched_order['job_description'] if matched_order['job_description'] else 'No special description provided.'}</div>
                     <div class="ticket-field"><span class="ticket-label">Print Size:</span> {matched_order['print_size']} (Trimmed: {matched_order['finished_print_size']})</div>
-                    <div class="ticket-field"><span class="ticket-label">Stock Required:</span> {matched_order['paper_type']} | {matched_order['gsm']} | Size: {matched_order['paper_size']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Colors / Ink:</span> {matched_order['paper_colour']} Paper — {matched_order['impressions_colour']} Run</div>
-                    <div class="ticket-field"><span class="ticket-label">Finishing Bind:</span> {matched_order['binding_type'] if matched_order['binding_type'] else 'None'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Lamination Spec:</span> {matched_order['laminating_type'] if matched_order['laminating_type'] else 'None'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Delivery Target:</span> {matched_order['delivery_mode']} by {matched_order['date_of_collection']}</div>
+                    <div class="ticket-field"><span class="ticket-label">Paper Type:</span> {matched_order['paper_type']} ({matched_order['gsm']})</div>
+                    <div class="ticket-field"><span class="ticket-label">Color Config:</span> {matched_order['impressions_colour']}</div>
                 </div>
                 """, unsafe_allow_html=True)
-
-                st.markdown('<div class="summary-box">', unsafe_allow_html=True)
-                st.markdown("<p style='font-size:1.25rem; font-weight:700; margin-top:0;'>Deployment Controls</p>", unsafe_allow_html=True)
-                start_date = st.date_input("Target Production Start Date", min_value=datetime.today().date())
                 
-                st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
-                st.markdown(f"**Target Units:** {order_qty:,}")
-                st.markdown(f"**Combined Value:** {CURRENCY}{total_val:,.2f}")
-                st.markdown(f"**Authorized By:** `{matched_order['approved_by']}`")
+                st.markdown("### Injection Scheduling Trigger")
+                layout_start_date = st.date_input("Target Queue Injection Start Date", value=datetime.now().date())
                 
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("DISPATCH TO FINITE QUEUES", use_container_width=True):
-                    if job_name and fin_route and any(c['machines'] for c in comp):
-                        add_multi_part_job({
-                            "name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, 
-                            "total_val": total_val, "start_date": start_date, "type_id": type_id, 
-                            "components": comp, "finishing_machines": fin_route
-                        })
-                        st.success("Successfully injected into floor scheduling buffers!")
+                if st.button("🚀 INJECT INTO ACTIVE MACHINE QUEUES", use_container_width=True):
+                    job_payload = {
+                        "name": job_name,
+                        "sales_rep": sales_rep,
+                        "total_qty": int(order_qty),
+                        "type_id": int(type_id),
+                        "components": comp,
+                        "finishing_machines": fin_route,
+                        "total_val": float(total_val),
+                        "start_date": layout_start_date
+                    }
+                    
+                    # Core configuration rule validation
+                    is_valid = all(len(c['machines']) > 0 for c in comp) and len(fin_route) > 0
+                    if is_valid:
+                        add_multi_part_job(job_payload)
+                        st.success("Production stream properties successfully deployed to live floor scheduling lines.")
+                        st.rerun()
                     else:
-                        st.error("Missing Parameters: Confirm at least one print asset and one finishing layout line are selected.")
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-    # --- MODE 6: SHOP FLOOR CONTROL (REDESIGNED VIEW) ---
+                        st.error("Configuration Failure: Please allocate at least one machine for both printing segments and finishing sequences.")
+
+    # --- MODE 6: SHOP FLOOR CONTROL ---
     elif app_mode == "Shop Floor Control":
-        st.markdown('<div class="section-header">Shop Floor Timeline & Allocation Matrix</div>', unsafe_allow_html=True)
-        
+        st.markdown('<div class="section-header">Live Factory Floor Routing & Queue Streams</div>', unsafe_allow_html=True)
         df = get_db_jobs()
         if df.empty:
-            st.info("No active machine runway steps planned inside the engine buffer logs currently.")
+            st.info("No active machine runs or operations are currently detected on the line boards.")
         else:
-            # Datetime sanitization
             df['start_time'] = pd.to_datetime(df['start_time'], utc=True, format='mixed')
             df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True, format='mixed')
             
-            # --- TOP COMPONENT: TIMELINE VISUALIZATION (PINNED PLOTTING AREA) ---
-            st.markdown("### Shop Floor Timeline Plot")
-            fig = px.timeline(
-                df, 
-                x_start="start_time", 
-                x_end="finish_time", 
-                y="machine", 
-                color="job_name",
-                hover_data=["tracking_id", "quantity", "impressions", "sales_rep"],
-                color_discrete_sequence=px.colors.qualitative.Safe
-            )
-            fig.update_yaxes(autorange="reversed")
-            fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                xaxis=dict(showgrid=True, gridcolor='#e2e8f0'),
-                yaxis=dict(title=None, showgrid=True, gridcolor='#e2e8f0'),
-                margin=dict(t=10, b=10, l=10, r=10),
-                legend=dict(title="Active Production Contracts", orientation="h", y=-0.2)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.markdown("<br><hr>", unsafe_allow_html=True)
-
-            # --- BOTTOM COMPONENT: BREAKDOWN STREAMS (ACCORDION SUMMARY GROUPING) ---
             st.markdown("### Factory Production Scheduling Streams")
-            
-            # Grouping entries by tracking_id to collapse repeating parameters seamlessly
             unique_jobs = df['tracking_id'].unique()
             
             for tid in unique_jobs:
@@ -632,11 +601,9 @@ else:
                 sales_lead = job_subset.iloc[0]['sales_rep']
                 total_qty = job_subset.iloc[0]['quantity']
                 
-                # Expandable accordion view block representing the Parent Contract context
                 with st.expander(f"Job: {parent_job_name} | ID: {tid} | Lead: {sales_lead} | Volume: {total_qty:,} Units"):
                     st.markdown('<div class="job-rollup-card">', unsafe_allow_html=True)
                     
-                    # Inner machine routing pipeline listing execution sequencing
                     for idx, run_row in job_subset.iterrows():
                         st.markdown(f"""
                         <div class="stream-row-item">
@@ -652,13 +619,3 @@ else:
                         """, unsafe_allow_html=True)
                         
                     st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # --- NEW: Delete functionality for scheduled job ---
-                    if is_admin:
-                        if st.button("🗑️ Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
-                            try:
-                                supabase.table('jobs').delete().eq('tracking_id', tid).execute()
-                                st.success(f"Production schedule {tid} successfully removed.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to clear job sequence: {str(e)}")
