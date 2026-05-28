@@ -495,4 +495,11 @@ else:
                     st.markdown("### Manage Archived Orders")
                     selected_order_no = st.selectbox("Select Order Number to Modify or Delete:", [""] + view_matrix['Order No'].tolist())
                     
+                    # Ensure this block is indented correctly
                     if selected_order_no:
+                        st.write(f"Actions for Order: {selected_order_no}")
+                        # Add your update or delete logic here, maintaining this indentation level
+                        if st.button("Delete Order"):
+                            # Example logic
+                            supabase.table('job_orders').delete().eq('job_order_no', selected_order_no).execute()
+                            st.rerun()
