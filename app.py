@@ -462,6 +462,40 @@ else:
                     use_container_width=True,
                     hide_index=True
                 )
+                
+                # --- NEW: Edit/Delete Administrative Controls for Ledger ---
+                if is_admin:
+                    st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
+                    st.markdown("### Manage Archived Orders")
+                    selected_order_no = st.selectbox("Select Order Number to Modify or Delete:", [""] + view_matrix['Order No'].tolist())
+                    
+                    if selected_order_no:
+                        target_row = approved_orders[approved_orders['job_order_no'] == selected_order_no].iloc[0]
+                        with st.expander(f"Edit or Delete Job Order: {selected_order_no}"):
+                            with st.form(key=f"edit_form_{target_row['id']}"):
+                                e_qty = st.number_input("Print Quantity", value=int(target_row['qty_to_print']), step=100)
+                                e_amt = st.number_input("Total Amount", value=float(target_row['total_amount']), step=50.0)
+                                
+                                c_upd, c_del = st.columns(2)
+                                if c_upd.form_submit_button("💾 Save Changes", use_container_width=True):
+                                    try:
+                                        supabase.table('job_orders').update({
+                                            "qty_to_print": int(e_qty),
+                                            "total_amount": float(e_amt)
+                                        }).eq('id', target_row['id']).execute()
+                                        st.success(f"Order {selected_order_no} updated successfully.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Update failed: {str(e)}")
+                                        
+                                if c_del.form_submit_button("🗑️ Delete Order", type="secondary", use_container_width=True):
+                                    try:
+                                        supabase.table('job_orders').delete().eq('id', target_row['id']).execute()
+                                        st.warning(f"Order {selected_order_no} permanently deleted.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Deletion failed: {str(e)}")
+
             else:
                 st.warning("No secure ledger rows matched your query input inside the database.")
 
@@ -549,7 +583,7 @@ else:
                     else:
                         st.error("Missing Parameters: Confirm at least one print asset and one finishing layout line are selected.")
                 st.markdown('</div>', unsafe_allow_html=True)
-
+                
     # --- MODE 6: SHOP FLOOR CONTROL (REDESIGNED VIEW) ---
     elif app_mode == "Shop Floor Control":
         st.markdown('<div class="section-header">Shop Floor Timeline & Allocation Matrix</div>', unsafe_allow_html=True)
@@ -585,7 +619,7 @@ else:
             st.plotly_chart(fig, use_container_width=True)
             
             st.markdown("<br><hr>", unsafe_allow_html=True)
-            
+
             # --- BOTTOM COMPONENT: BREAKDOWN STREAMS (ACCORDION SUMMARY GROUPING) ---
             st.markdown("### Factory Production Scheduling Streams")
             
@@ -618,3 +652,13 @@ else:
                         """, unsafe_allow_html=True)
                         
                     st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # --- NEW: Delete functionality for scheduled job ---
+                    if is_admin:
+                        if st.button("🗑️ Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
+                            try:
+                                supabase.table('jobs').delete().eq('tracking_id', tid).execute()
+                                st.success(f"Production schedule {tid} successfully removed.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to clear job sequence: {str(e)}")
