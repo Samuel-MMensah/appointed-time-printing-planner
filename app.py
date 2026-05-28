@@ -462,59 +462,6 @@ else:
                     use_container_width=True,
                     hide_index=True
                 )
-                
-                # Inline Management Editing and Deletion controls
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown("#### Record Maintenance Actions")
-                selected_job_no = st.selectbox(
-                    "Select an Approved Order to Edit or Delete:", 
-                    ["-- Choose Order --"] + sorted(filtered_orders['job_order_no'].tolist())
-                )
-                
-                if selected_job_no != "-- Choose Order --":
-                    record_to_alter = filtered_orders[filtered_orders['job_order_no'] == selected_job_no].iloc[0]
-                    
-                    edit_col, delete_col = st.columns([2, 1])
-                    
-                    with edit_col:
-                        with st.form(f"edit_archive_form_{record_to_alter['id']}"):
-                            st.markdown(f"**Edit Job Order Details ({selected_job_no})**")
-                            new_customer = st.text_input("Customer Name", value=record_to_alter['customer_name'])
-                            new_phone = st.text_input("Telephone Number", value=record_to_alter['telephone_number'])
-                            new_desc = st.text_area("Job Description", value=record_to_alter['job_description'] or "")
-                            
-                            c1, c2, c3 = st.columns(3)
-                            new_qty = c1.number_input("Quantity to Print", value=int(record_to_alter['qty_to_print']), min_value=1)
-                            new_total = c2.number_input(f"Total Amount ({CURRENCY})", value=float(record_to_alter['total_amount']), min_value=0.0)
-                            new_deposit = c3.number_input(f"Deposit Amount ({CURRENCY})", value=float(record_to_alter['deposit_amount']), min_value=0.0)
-                            
-                            update_btn = st.form_submit_button("SAVE ADJUSTMENTS", use_container_width=True)
-                            if update_btn:
-                                try:
-                                    supabase.table('job_orders').update({
-                                        "customer_name": sanitize_string(new_customer),
-                                        "telephone_number": sanitize_string(new_phone),
-                                        "job_description": sanitize_string(new_desc),
-                                        "qty_to_print": int(new_qty),
-                                        "total_amount": float(new_total),
-                                        "deposit_amount": float(new_deposit)
-                                    }).eq('id', record_to_alter['id']).execute()
-                                    st.success(f"Archived Ledger Row {selected_job_no} successfully updated.")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Adjustment Failure: {str(e)}")
-                                    
-                    with delete_col:
-                        st.markdown("**Destructive Action Zone**")
-                        st.warning("Deleting this archived record will remove it entirely from management auditing ledgers.")
-                        confirm_delete = st.checkbox(f"Confirm absolute deletion of {selected_job_no}")
-                        if st.button("PURGE ORDER FROM VAULT", type="primary", use_container_width=True, disabled=not confirm_delete):
-                            try:
-                                supabase.table('job_orders').delete().eq('id', record_to_alter['id']).execute()
-                                st.success(f"Job Order {selected_job_no} has been completely purged.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Purge request aborted: {str(e)}")
             else:
                 st.warning("No secure ledger rows matched your query input inside the database.")
 
@@ -598,50 +545,76 @@ else:
                             "total_val": total_val, "start_date": start_date, "type_id": type_id, 
                             "components": comp, "finishing_machines": fin_route
                         })
-                        st.success("Dispatched successfully.")
-                        st.rerun()
+                        st.success("Successfully injected into floor scheduling buffers!")
+                    else:
+                        st.error("Missing Parameters: Confirm at least one print asset and one finishing layout line are selected.")
+                st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- MODE 6: SHOP FLOOR CONTROL ---
+    # --- MODE 6: SHOP FLOOR CONTROL (REDESIGNED VIEW) ---
     elif app_mode == "Shop Floor Control":
-        st.markdown('<div class="section-header">Live Machine Routing Matrix & Shop Floor Control</div>', unsafe_allow_html=True)
-        jobs_df = get_db_jobs()
+        st.markdown('<div class="section-header">Shop Floor Timeline & Allocation Matrix</div>', unsafe_allow_html=True)
         
-        if jobs_df.empty:
-            st.info("No active production streams allocated across the plant machinery profiles.")
+        df = get_db_jobs()
+        if df.empty:
+            st.info("No active machine runway steps planned inside the engine buffer logs currently.")
         else:
-            jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], utc=True, format='mixed')
-            jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], utc=True, format='mixed')
+            # Datetime sanitization
+            df['start_time'] = pd.to_datetime(df['start_time'], utc=True, format='mixed')
+            df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True, format='mixed')
             
-            machine_profiles = sorted(jobs_df['machine'].unique())
+            # --- TOP COMPONENT: TIMELINE VISUALIZATION (PINNED PLOTTING AREA) ---
+            st.markdown("### Shop Floor Timeline Plot")
+            fig = px.timeline(
+                df, 
+                x_start="start_time", 
+                x_end="finish_time", 
+                y="machine", 
+                color="job_name",
+                hover_data=["tracking_id", "quantity", "impressions", "sales_rep"],
+                color_discrete_sequence=px.colors.qualitative.Safe
+            )
+            fig.update_yaxes(autorange="reversed")
+            fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(showgrid=True, gridcolor='#e2e8f0'),
+                yaxis=dict(title=None, showgrid=True, gridcolor='#e2e8f0'),
+                margin=dict(t=10, b=10, l=10, r=10),
+                legend=dict(title="Active Production Contracts", orientation="h", y=-0.2)
+            )
+            st.plotly_chart(fig, use_container_width=True)
             
-            for m_key in machine_profiles:
-                m_runs = jobs_df[jobs_df['machine'] == m_key].sort_values(by='start_time')
-                st.markdown(f"#### Machine Line Terminal: **{m_key}**")
+            st.markdown("<br><hr>", unsafe_allow_html=True)
+            
+            # --- BOTTOM COMPONENT: BREAKDOWN STREAMS (ACCORDION SUMMARY GROUPING) ---
+            st.markdown("### Factory Production Scheduling Streams")
+            
+            # Grouping entries by tracking_id to collapse repeating parameters seamlessly
+            unique_jobs = df['tracking_id'].unique()
+            
+            for tid in unique_jobs:
+                job_subset = df[df['tracking_id'] == tid].sort_values(by='start_time')
+                parent_job_name = job_subset.iloc[0]['job_name']
+                sales_lead = job_subset.iloc[0]['sales_rep']
+                total_qty = job_subset.iloc[0]['quantity']
                 
-                for _, run in m_runs.iterrows():
-                    st.markdown(f"""
-                    <div class="job-rollup-card">
-                        <div style="font-weight: 700; font-size: 1rem; color: #0f172a; display: flex; justify-content: space-between;">
-                            <span>📦 ID: {run['tracking_id']} — {run['job_name']}</span>
-                            <span style="color:#2563eb;">Value Allocation: {CURRENCY}{run['contract_value']:,.2f}</span>
-                        </div>
-                        <div class="stream-row-item">
-                            <span>⏱️ <b>Operation Window:</b> {run['start_time'].strftime('%m-%d %H:%M')} &rarr; {run['finish_time'].strftime('%m-%d %H:%M')}</span>
-                            <span>🎯 <b>Target Component Run Qty:</b> {run['impressions']:,} Imp.</span>
-                        </div>
-                        <div style="font-size: 0.8rem; color: #64748b; margin-top: 0.25rem;">
-                            Sales Representative Lead Account: <u>{run['sales_rep']}</u>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # Expandable accordion view block representing the Parent Contract context
+                with st.expander(f"Job: {parent_job_name} | ID: {tid} | Lead: {sales_lead} | Volume: {total_qty:,} Units"):
+                    st.markdown('<div class="job-rollup-card">', unsafe_allow_html=True)
                     
-                    # Direct removal capability per discrete machine stream allocation
-                    col_spacer, col_action = st.columns([5, 1])
-                    if col_action.button("Delete Stream Allocation", key=f"del_stream_{run['id']}", type="secondary", use_container_width=True):
-                        try:
-                            supabase.table('jobs').delete().eq('id', run['id']).execute()
-                            st.success(f"Stream component entry removed from {m_key}.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Execution Error: {str(e)}")
-                st.markdown("<hr style='margin: 1.5rem 0; border-color: #e2e8f0;'>", unsafe_allow_html=True)
+                    # Inner machine routing pipeline listing execution sequencing
+                    for idx, run_row in job_subset.iterrows():
+                        st.markdown(f"""
+                        <div class="stream-row-item">
+                            <div>
+                                <strong>Station Alloc:</strong> {run_row['machine']} <br>
+                                <span style="color:#64748b;">Target Volume Run: {int(run_row['impressions']):,} impressions</span>
+                            </div>
+                            <div style="text-align:right;">
+                                <strong>Timeline Boundary:</strong> {run_row['start_time'].strftime('%b %d, %H:%M')} to {run_row['finish_time'].strftime('%b %d, %H:%M')} <br>
+                                <span style="color:#059669; font-weight:600;">Stage Value allocation: {CURRENCY}{run_row['contract_value']:,.2f}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    st.markdown('</div>', unsafe_allow_html=True)
