@@ -279,14 +279,24 @@ def apply_calendar_bounds(dt):
 
 def get_machine_next_available_time(machine_name, requested_start_dt):
     df = get_db_jobs()
+    naive_requested = requested_start_dt.replace(tzinfo=None)
     if df.empty or 'machine' not in df.columns:
-        return apply_calendar_bounds(requested_start_dt)
+        return apply_calendar_bounds(naive_requested)
     m_df = df[df['machine'] == machine_name].copy()
     if m_df.empty:
-        return apply_calendar_bounds(requested_start_dt)
-    m_df['finish_time'] = pd.to_datetime(m_df['finish_time'], utc=True, format='mixed')
-    max_finish = m_df['finish_time'].max().to_pydatetime()
-    return apply_calendar_bounds(max_finish) if max_finish > requested_start_dt.replace(tzinfo=None) else apply_calendar_bounds(requested_start_dt)
+        return apply_calendar_bounds(naive_requested)
+    
+    m_df['finish_time'] = pd.to_datetime(m_df['finish_time'], format='mixed', errors='coerce')
+    m_df = m_df.dropna(subset=['finish_time'])
+    if m_df.empty:
+        return apply_calendar_bounds(naive_requested)
+        
+    max_finish = m_df['finish_time'].max()
+    if isinstance(max_finish, pd.Timestamp):
+        max_finish = max_finish.to_pydatetime()
+    max_finish = max_finish.replace(tzinfo=None)
+    
+    return apply_calendar_bounds(max_finish) if max_finish > naive_requested else apply_calendar_bounds(naive_requested)
 
 def calculate_production_time(start_dt, impressions, machine_name, apply_setup=True):
     mach = MACHINE_DATA[machine_name]
