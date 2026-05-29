@@ -11,7 +11,7 @@ import plotly.express as px
 st.set_page_config(
     page_title="Appointed Time | Secured Enterprise Suite",
     layout="wide",
-    page_icon="  🏢  ",
+    page_icon="🏢",
     initial_sidebar_state="expanded"
 )
 
@@ -159,6 +159,71 @@ html, body, [class*="css"] {
 .stRadio > label {
     font-weight: 600 !important;
     color: #1e293b !important;
+}
+
+/* --- REFINED SIDEBAR CONTAINER CARDS & INTERACTION LAYERS --- */
+.sidebar-card {
+    background: #ffffff;
+    padding: 1.25rem;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    margin-bottom: 1.25rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
+.sidebar-header-text {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #475569;
+    margin-bottom: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid #f1f5f9;
+    padding-bottom: 0.5rem;
+}
+.sidebar-btn-active {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    background-color: #0f172a;
+    color: #ffffff !important;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+    border: none;
+    text-align: left;
+}
+.sidebar-btn-inactive {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    background-color: transparent;
+    color: #334155 !important;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    margin-bottom: 0.35rem;
+    border: none;
+    text-align: left;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+.sidebar-btn-inactive:hover {
+    background-color: #f1f5f9;
+    color: #0f172a !important;
+    padding-left: 1.05rem;
+}
+.sidebar-icon {
+    margin-right: 0.65rem;
+    font-size: 1rem;
+    display: inline-block;
+    width: 1.25rem;
+    text-align: center;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -309,8 +374,18 @@ if "authenticated" not in st.session_state:
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "Command Center"
 
+# Corporate Unified Aesthetic Icons Registry
+MODULE_ICONS = {
+    "Command Center": "⊙",
+    "Shop Floor Control": "☵",
+    "Production Layout Builder": "⎋",
+    "Raise Job Order": "📋",
+    "Authorization Center": "✓",
+    "Approved Orders Archive": "📁"
+}
+
 with st.sidebar:
-    st.markdown("###   🔒   Secure Access Portal")
+    st.markdown("### 🔒 Secure Access Portal")
     if not st.session_state.authenticated:
         with st.form("auth_form"):
             email = st.text_input("Corporate Email")
@@ -333,7 +408,7 @@ with st.sidebar:
         is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"]) if st.session_state.authenticated else False
         is_frontdesk = "frontdesk" in user_email if st.session_state.authenticated else False
         
-        st.markdown("###   🛠️   ERP WORKSPACE MODULES")
+        st.markdown("### 🛠️ ERP WORKSPACE MODULES")
         
         ops_modules = ["Command Center", "Shop Floor Control"]
         if is_admin:
@@ -343,44 +418,36 @@ with st.sidebar:
         if is_admin:
             admin_modules += ["Authorization Center", "Approved Orders Archive"]
 
-        def on_change_ops():
-            st.session_state.app_mode = st.session_state.ops_radio_key
-            st.session_state.admin_radio_index_key = None
-
-        def on_change_admin():
-            st.session_state.app_mode = st.session_state.admin_radio_key
-            st.session_state.ops_radio_index_key = None
-
-        if st.session_state.app_mode in ops_modules:
-            current_ops_idx = ops_modules.index(st.session_state.app_mode)
-            current_admin_idx = None
-        elif st.session_state.app_mode in admin_modules:
-            current_ops_idx = None
-            current_admin_idx = admin_modules.index(st.session_state.app_mode)
-        else:
-            current_ops_idx = 0
-            current_admin_idx = None
-
-        st.markdown("<p style='font-size:0.8rem; font-weight:700; color:#64748b; margin-bottom:0.25rem; text-transform:uppercase;'>  📈   Plant Operations</p>", unsafe_allow_html=True)
-        selected_ops = st.radio(
-            "Execute Plant Controls:",
-            ops_modules,
-            index=current_ops_idx if current_ops_idx is not None else 0,
-            key="ops_radio_key",
-            on_change=on_change_ops,
-            label_visibility="collapsed"
-        )
+        # --- 5A. PLANT OPERATIONS SECTION CARD ---
+        st.markdown(f"""
+        <div class="sidebar-card">
+            <div class="sidebar-header-text">📈 Plant Operations</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        st.markdown("<p style='font-size:0.8rem; font-weight:700; color:#64748b; margin-top:1rem; margin-bottom:0.25rem; text-transform:uppercase;'>  💼   Administration Panel</p>", unsafe_allow_html=True)
-        selected_admin = st.radio(
-            "Execute Corporate Governance:",
-            admin_modules,
-            index=current_admin_idx if current_admin_idx is not None else 0,
-            key="admin_radio_key",
-            on_change=on_change_admin,
-            label_visibility="collapsed"
-        )
+        for mod in ops_modules:
+            ico = MODULE_ICONS.get(mod, "▪")
+            btn_style = "sidebar-btn-active" if st.session_state.app_mode == mod else "sidebar-btn-inactive"
+            if st.button(f"{ico} {mod}", key=f"btn_ops_{mod}", use_container_width=True):
+                st.session_state.app_mode = mod
+                st.rerun()
+                
+        st.markdown("<div style='margin-bottom:1rem;'></div>", unsafe_allow_html=True)
+
+        # --- 5B. ADMINISTRATION PANEL SECTION CARD ---
+        st.markdown(f"""
+        <div class="sidebar-card">
+            <div class="sidebar-header-text">💼 Administration Panel</div>
+        </div>
+        """, unsafe_allow_html=True)
         
+        for mod in admin_modules:
+            ico = MODULE_ICONS.get(mod, "▪")
+            btn_style = "sidebar-btn-active" if st.session_state.app_mode == mod else "sidebar-btn-inactive"
+            if st.button(f"{ico} {mod}", key=f"btn_admin_{mod}", use_container_width=True):
+                st.session_state.app_mode = mod
+                st.rerun()
+
         app_mode = st.session_state.app_mode
         st.markdown("<hr style='margin:1rem 0;'>", unsafe_allow_html=True)
         if st.button("Terminate Session", use_container_width=True, type="secondary"):
@@ -706,11 +773,8 @@ else:
         if jobs_df.empty:
             st.info("All floor boards are currently idle. No tasks discovered in tracking rows.")
         else:
-            # Ensure timestamps are parsed uniformly as datetime objects
             jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='mixed', errors='coerce')
             jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='mixed', errors='coerce')
-            
-            # Drop entries with corrupted or missing dates before processing visuals
             jobs_df = jobs_df.dropna(subset=['start_time', 'finish_time'])
             
             m_filter = st.multiselect("Filter View Board by Stationary Assets:", sorted(list(MACHINE_DATA.keys())))
@@ -749,7 +813,6 @@ else:
                 timeline_data = jobs_df[jobs_df['tracking_id'].isin(paginated_tids)].copy()
                 
                 if not timeline_data.empty:
-                    # Explicitly convert to string/un-localized datetimes to safeguard plotly-express parsing layers
                     timeline_data['Start Time'] = timeline_data['start_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
                     timeline_data['Finish Time'] = timeline_data['finish_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
                     timeline_data['Machine Asset'] = timeline_data['machine']
@@ -766,7 +829,6 @@ else:
                             color_discrete_sequence=px.colors.qualitative.Prism
                         )
                         
-                        # Defend against an AttributeError by verifying fig_timeline initialization status
                         if fig_timeline is not None:
                             fig_timeline.update_yaxis(autorange="reversed")
                             fig_timeline.update_layout(
@@ -804,7 +866,6 @@ else:
                     """, unsafe_allow_html=True)
                     
                     for _, run_row in flow_rows.iterrows():
-                        # Protect formatting strings from timezone exceptions
                         s_str = run_row['start_time'].strftime('%b %d, %H:%M') if pd.notnull(run_row['start_time']) else "N/A"
                         f_str = run_row['finish_time'].strftime('%b %d, %H:%M') if pd.notnull(run_row['finish_time']) else "N/A"
                         st.markdown(f"""
@@ -823,7 +884,7 @@ else:
                     st.markdown('</div>', unsafe_allow_html=True)
                     
                     if is_admin:
-                        if st.button(" 🗑️  Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
+                        if st.button("🗑️ Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
                             try:
                                 supabase.table('jobs').delete().eq('tracking_id', tid).execute()
                                 st.success(f"Production schedule {tid} successfully removed.")
