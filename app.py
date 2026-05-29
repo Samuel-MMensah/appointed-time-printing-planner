@@ -43,7 +43,7 @@ MACHINE_DATA = {
 # --- 3. PREMIUM "CLEAN INDUSTRIAL LIGHT" CSS TYPOGRAPHY & STYLING ---
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700;800&display=swap');
 html, body, [class*="css"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background-color: #f8fafc;
@@ -156,7 +156,6 @@ html, body, [class*="css"] {
 .stream-row-item:last-child {
     border-bottom: none;
 }
-/* Sidebar Clean styling corrections */
 .stRadio > label {
     font-weight: 600 !important;
     color: #1e293b !important;
@@ -307,7 +306,6 @@ def add_multi_part_job(job_data):
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-# Initialize unified app navigation routing states
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "Command Center"
 
@@ -335,10 +333,8 @@ with st.sidebar:
         is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"]) if st.session_state.authenticated else False
         is_frontdesk = "frontdesk" in user_email if st.session_state.authenticated else False
         
-        # --- CATEGORIZED NAVIGATION WITH UNIFIED REAL-TIME STATE SYNC ---
         st.markdown("###   🛠️   ERP WORKSPACE MODULES")
         
-        # Setup specific lists for index mapping dynamically based on roles
         ops_modules = ["Command Center", "Shop Floor Control"]
         if is_admin:
             ops_modules.insert(1, "Production Layout Builder")
@@ -347,7 +343,6 @@ with st.sidebar:
         if is_admin:
             admin_modules += ["Authorization Center", "Approved Orders Archive"]
 
-        # Callbacks to keep routing strict and remove layout conflicts instantly
         def on_change_ops():
             st.session_state.app_mode = st.session_state.ops_radio_key
             st.session_state.admin_radio_index_key = None
@@ -356,7 +351,6 @@ with st.sidebar:
             st.session_state.app_mode = st.session_state.admin_radio_key
             st.session_state.ops_radio_index_key = None
 
-        # Determine index allocations safely matching st.session_state.app_mode
         if st.session_state.app_mode in ops_modules:
             current_ops_idx = ops_modules.index(st.session_state.app_mode)
             current_admin_idx = None
@@ -367,7 +361,6 @@ with st.sidebar:
             current_ops_idx = 0
             current_admin_idx = None
 
-        # Render Plant Operations Category
         st.markdown("<p style='font-size:0.8rem; font-weight:700; color:#64748b; margin-bottom:0.25rem; text-transform:uppercase;'>  📈   Plant Operations</p>", unsafe_allow_html=True)
         selected_ops = st.radio(
             "Execute Plant Controls:",
@@ -378,7 +371,6 @@ with st.sidebar:
             label_visibility="collapsed"
         )
         
-        # Render Administration Panel Category
         st.markdown("<p style='font-size:0.8rem; font-weight:700; color:#64748b; margin-top:1rem; margin-bottom:0.25rem; text-transform:uppercase;'>  💼   Administration Panel</p>", unsafe_allow_html=True)
         selected_admin = st.radio(
             "Execute Corporate Governance:",
@@ -714,104 +706,127 @@ else:
         if jobs_df.empty:
             st.info("All floor boards are currently idle. No tasks discovered in tracking rows.")
         else:
-            jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='mixed')
-            jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='mixed')
+            # Ensure timestamps are parsed uniformly as datetime objects
+            jobs_df['start_time'] = pd.to_datetime(jobs_df['start_time'], format='mixed', errors='coerce')
+            jobs_df['finish_time'] = pd.to_datetime(jobs_df['finish_time'], format='mixed', errors='coerce')
             
-            # Machine Filtering Layer
+            # Drop entries with corrupted or missing dates before processing visuals
+            jobs_df = jobs_df.dropna(subset=['start_time', 'finish_time'])
+            
             m_filter = st.multiselect("Filter View Board by Stationary Assets:", sorted(list(MACHINE_DATA.keys())))
             if m_filter:
                 jobs_df = jobs_df[jobs_df['machine'].isin(m_filter)]
                 
-            unique_tracking_ids = jobs_df['tracking_id'].unique()
-            PAGE_SIZE_SF = 10
-            total_jobs = len(unique_tracking_ids)
-            total_pages_sf = math.ceil(total_jobs / PAGE_SIZE_SF)
-            if "sf_page" not in st.session_state:
-                st.session_state.sf_page = 1
-                
-            col_p1, col_p2, col_p3 = st.columns([1, 4, 1])
-            with col_p1:
-                if st.button(" ⬅️ Previous", key="sf_prev_btn", disabled=(st.session_state.sf_page <= 1), use_container_width=True):
-                    st.session_state.sf_page -= 1
-                    st.rerun()
-            with col_p2:
-                st.markdown(f"<p style='text-align: center; color: #64748b; font-weight: 600;'>Showing records {((st.session_state.sf_page - 1) * PAGE_SIZE_SF) + 1} - {min(st.session_state.sf_page * PAGE_SIZE_SF, total_jobs)} of {total_jobs} (Page {st.session_state.sf_page} of {total_pages_sf})</p>", unsafe_allow_html=True)
-            with col_p3:
-                if st.button("Next ➡️ ", key="sf_next_btn", disabled=(st.session_state.sf_page >= total_pages_sf), use_container_width=True):
-                    st.session_state.sf_page += 1
-                    st.rerun()
+            unique_tracking_ids = jobs_df['tracking_id'].unique() if not jobs_df.empty else []
+            
+            if len(unique_tracking_ids) == 0:
+                st.info("No matching schedule items discovered for chosen stationary filters.")
+            else:
+                PAGE_SIZE_SF = 10
+                total_jobs = len(unique_tracking_ids)
+                total_pages_sf = math.ceil(total_jobs / PAGE_SIZE_SF)
+                if "sf_page" not in st.session_state:
+                    st.session_state.sf_page = 1
                     
-            start_idx = (st.session_state.sf_page - 1) * PAGE_SIZE_SF
-            end_idx = start_idx + PAGE_SIZE_SF
-            paginated_tids = unique_tracking_ids[start_idx:end_idx]
-            
-            # --- RENDER TIMELINE CHART ---
-            st.markdown("### 📊 Shop Floor Timeline Plot")
-            timeline_data = jobs_df[jobs_df['tracking_id'].isin(paginated_tids)].copy()
-            if not timeline_data.empty:
-                timeline_data['Start Time'] = timeline_data['start_time']
-                timeline_data['Finish Time'] = timeline_data['finish_time']
-                timeline_data['Machine Asset'] = timeline_data['machine']
-                timeline_data['Job Label'] = timeline_data['job_name']
+                col_p1, col_p2, col_p3 = st.columns([1, 4, 1])
+                with col_p1:
+                    if st.button(" ⬅️ Previous", key="sf_prev_btn", disabled=(st.session_state.sf_page <= 1), use_container_width=True):
+                        st.session_state.sf_page -= 1
+                        st.rerun()
+                with col_p2:
+                    st.markdown(f"<p style='text-align: center; color: #64748b; font-weight: 600;'>Showing records {((st.session_state.sf_page - 1) * PAGE_SIZE_SF) + 1} - {min(st.session_state.sf_page * PAGE_SIZE_SF, total_jobs)} of {total_jobs} (Page {st.session_state.sf_page} of {total_pages_sf})</p>", unsafe_allow_html=True)
+                with col_p3:
+                    if st.button("Next ➡️ ", key="sf_next_btn", disabled=(st.session_state.sf_page >= total_pages_sf), use_container_width=True):
+                        st.session_state.sf_page += 1
+                        st.rerun()
+                        
+                start_idx = (st.session_state.sf_page - 1) * PAGE_SIZE_SF
+                end_idx = start_idx + PAGE_SIZE_SF
+                paginated_tids = unique_tracking_ids[start_idx:end_idx]
                 
-                fig_timeline = px.timeline(
-                    timeline_data,
-                    x_start="Start Time",
-                    x_end="Finish Time",
-                    y="Machine Asset",
-                    color="Job Label",
-                    hover_data=["tracking_id", "impressions", "quantity"],
-                    color_discrete_sequence=px.colors.qualitative.Prism
-                )
-                fig_timeline.update_yaxis(autorange="reversed")
-                fig_timeline.update_layout(
-                    plot_bgcolor='#ffffff',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    margin=dict(t=20, b=20, l=10, r=10),
-                    xaxis=dict(gridcolor='#f1f5f9', title="Timeline Run Bounds"),
-                    yaxis=dict(gridcolor='#f1f5f9')
-                )
-                st.plotly_chart(fig_timeline, use_container_width=True)
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            # --- RENDER CARDS ---
-            for tid in paginated_tids:
-                flow_rows = jobs_df[jobs_df['tracking_id'] == tid].sort_values('start_time')
-                first_row = flow_rows.iloc[0]
-                total_flow_value = flow_rows['contract_value'].sum()
+                # --- RENDER TIMELINE CHART ---
+                st.markdown("### 📊 Shop Floor Timeline Plot")
+                timeline_data = jobs_df[jobs_df['tracking_id'].isin(paginated_tids)].copy()
                 
-                st.markdown(f"""
-                <div class="job-rollup-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-                        <span style="font-size:1.15rem; font-weight:700; color:#0f172a;">{first_row['job_name']}</span>
-                        <span style="background-color:#e2e8f0; color:#334155; font-size:0.75rem; font-weight:700; padding:0.25rem 0.6rem; border-radius:20px;">{tid}</span>
-                    </div>
-                    <div style="font-size:0.85rem; color:#64748b; margin-bottom:0.75rem;">
-                        Lead Sales Rep: <strong>{first_row['sales_rep']}</strong> &nbsp;|&nbsp; Target Production Yield: <strong>{int(first_row['quantity']):,} items</strong> &nbsp;|&nbsp; Unified Flow Value: <strong>{CURRENCY}{total_flow_value:,.2f}</strong>
-                    </div>
-                """, unsafe_allow_html=True)
+                if not timeline_data.empty:
+                    # Explicitly convert to string/un-localized datetimes to safeguard plotly-express parsing layers
+                    timeline_data['Start Time'] = timeline_data['start_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    timeline_data['Finish Time'] = timeline_data['finish_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    timeline_data['Machine Asset'] = timeline_data['machine']
+                    timeline_data['Job Label'] = timeline_data['job_name']
+                    
+                    try:
+                        fig_timeline = px.timeline(
+                            timeline_data,
+                            x_start="Start Time",
+                            x_end="Finish Time",
+                            y="Machine Asset",
+                            color="Job Label",
+                            hover_data=["tracking_id", "impressions", "quantity"],
+                            color_discrete_sequence=px.colors.qualitative.Prism
+                        )
+                        
+                        # Defend against an AttributeError by verifying fig_timeline initialization status
+                        if fig_timeline is not None:
+                            fig_timeline.update_yaxis(autorange="reversed")
+                            fig_timeline.update_layout(
+                                plot_bgcolor='#ffffff',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                margin=dict(t=20, b=20, l=10, r=10),
+                                xaxis=dict(gridcolor='#f1f5f9', title="Timeline Run Bounds"),
+                                yaxis=dict(gridcolor='#f1f5f9')
+                            )
+                            st.plotly_chart(fig_timeline, use_container_width=True)
+                        else:
+                            st.error("Failed to construct layout: Timeline model generated an empty projection matrix.")
+                    except Exception as ex:
+                        st.warning("Timeline display skipped: Data coordinates are currently reorganizing or out of viewing ranges.")
+                else:
+                    st.info("No active production items mapped to the timeline chart layer.")
                 
-                for _, run_row in flow_rows.iterrows():
+                st.markdown("<br>", unsafe_allow_html=True)
+                # --- RENDER CARDS ---
+                for tid in paginated_tids:
+                    flow_rows = jobs_df[jobs_df['tracking_id'] == tid].sort_values('start_time')
+                    if flow_rows.empty: continue
+                    first_row = flow_rows.iloc[0]
+                    total_flow_value = flow_rows['contract_value'].sum()
+                    
                     st.markdown(f"""
-                    <div class="stream-row-item">
-                        <div>
-                            <strong>Station Alloc:</strong> {run_row['machine']} <br>
-                            <span style="color:#64748b;">Target Volume Run: {int(run_row['impressions']):,} impressions</span>
+                    <div class="job-rollup-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                            <span style="font-size:1.15rem; font-weight:700; color:#0f172a;">{first_row['job_name']}</span>
+                            <span style="background-color:#e2e8f0; color:#334155; font-size:0.75rem; font-weight:700; padding:0.25rem 0.6rem; border-radius:20px;">{tid}</span>
                         </div>
-                        <div style="text-align:right;">
-                            <strong>Timeline Boundary:</strong> {run_row['start_time'].strftime('%b %d, %H:%M')} to {run_row['finish_time'].strftime('%b %d, %H:%M')} <br>
-                            <span style="color:#059669; font-weight:600;\">Stage Value allocation: {CURRENCY}{run_row['contract_value']:,.2f}</span>
+                        <div style="font-size:0.85rem; color:#64748b; margin-bottom:0.75rem;">
+                            Lead Sales Rep: <strong>{first_row['sales_rep']}</strong> &nbsp;|&nbsp; Target Production Yield: <strong>{int(first_row['quantity']):,} items</strong> &nbsp;|&nbsp; Unified Flow Value: <strong>{CURRENCY}{total_flow_value:,.2f}</strong>
                         </div>
-                    </div>
                     """, unsafe_allow_html=True)
                     
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                if is_admin:
-                    if st.button(" 🗑️  Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
-                        try:
-                            supabase.table('jobs').delete().eq('tracking_id', tid).execute()
-                            st.success(f"Production schedule {tid} successfully removed.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to clear job sequence: {str(e)}")
+                    for _, run_row in flow_rows.iterrows():
+                        # Protect formatting strings from timezone exceptions
+                        s_str = run_row['start_time'].strftime('%b %d, %H:%M') if pd.notnull(run_row['start_time']) else "N/A"
+                        f_str = run_row['finish_time'].strftime('%b %d, %H:%M') if pd.notnull(run_row['finish_time']) else "N/A"
+                        st.markdown(f"""
+                        <div class="stream-row-item">
+                            <div>
+                                <strong>Station Alloc:</strong> {run_row['machine']} <br>
+                                <span style="color:#64748b;">Target Volume Run: {int(run_row['impressions']):,} impressions</span>
+                            </div>
+                            <div style="text-align:right;">
+                                <strong>Timeline Boundary:</strong> {s_str} to {f_str} <br>
+                                <span style="color:#059669; font-weight:600;\">Stage Value allocation: {CURRENCY}{run_row['contract_value']:,.2f}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    if is_admin:
+                        if st.button(" 🗑️  Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
+                            try:
+                                supabase.table('jobs').delete().eq('tracking_id', tid).execute()
+                                st.success(f"Production schedule {tid} successfully removed.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to clear job sequence: {str(e)}")
