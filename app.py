@@ -423,7 +423,7 @@ else:
                             except Exception as e:
                                 st.error(f"Failed deletion request: {str(e)}")
 
-    # --- MODE 4: APPROVED ORDERS ARCHIVE ---
+    # --- MODE 4: APPROVED ORDERS ARCHIVE (WITH SAFE EDIT/DELETE) ---
     elif app_mode == "Approved Orders Archive":
         st.markdown('<div class="section-header">Enterprise Ledger & Approved Orders Vault</div>', unsafe_allow_html=True)
         approved_orders = get_db_job_orders("Approved")
@@ -431,71 +431,81 @@ else:
         if approved_orders.empty:
             st.info("No approved job contracts are currently sitting in the registry history index.")
         else:
-            st.markdown("### Archival Database Real-Time Search Matrix")
-            search_query = st.text_input("Query ledger records by exact Order Number or Customer Identity:", "").strip().lower()
+            tab_view, tab_manage = st.tabs(["Real-Time Search Matrix", "Manage Registry Records"])
             
-            if search_query:
-                filtered_orders = approved_orders[
-                    approved_orders['job_order_no'].astype(str).str.lower().str.contains(search_query) |
-                    approved_orders['customer_name'].str.lower().str.contains(search_query)
-                ]
-            else:
-                filtered_orders = approved_orders
+            with tab_view:
+                search_query = st.text_input("Query ledger records by exact Order Number or Customer Identity:", "").strip().lower()
+                if search_query:
+                    filtered_orders = approved_orders[
+                        approved_orders['job_order_no'].astype(str).str.lower().str.contains(search_query) |
+                        approved_orders['customer_name'].str.lower().str.contains(search_query)
+                    ]
+                else:
+                    filtered_orders = approved_orders
 
-            view_matrix = filtered_orders.copy()
-            if not view_matrix.empty:
-                view_matrix['Total Amount'] = view_matrix['total_amount'].apply(lambda x: f"{CURRENCY}{x:,.2f}")
-                view_matrix['Deposit'] = view_matrix['deposit_amount'].apply(lambda x: f"{CURRENCY}{x:,.2f}")
-                view_matrix = view_matrix.rename(columns={
-                    'job_order_no': 'Order No',
-                    'customer_name': 'Customer Name',
-                    'qty_to_print': 'Print Qty',
-                    'type_of_print': 'Category',
-                    'paper_type': 'Paper Stock',
-                    'gsm': 'GSM',
-                    'impressions_colour': 'Ink Config',
-                    'approved_by': 'Authorized Manager'
-                })
-                
-                st.dataframe(
-                    view_matrix[['Order No', 'Customer Name', 'Print Qty', 'Category', 'Paper Stock', 'GSM', 'Ink Config', 'Total Amount', 'Deposit', 'Authorized Manager']],
-                    use_container_width=True,
-                    hide_index=True
+                view_matrix = filtered_orders.copy()
+                if not view_matrix.empty:
+                    view_matrix['Total Amount'] = view_matrix['total_amount'].apply(lambda x: f"{CURRENCY}{x:,.2f}")
+                    view_matrix['Deposit'] = view_matrix['deposit_amount'].apply(lambda x: f"{CURRENCY}{x:,.2f}")
+                    view_matrix = view_matrix.rename(columns={
+                        'job_order_no': 'Order No',
+                        'customer_name': 'Customer Name',
+                        'qty_to_print': 'Print Qty',
+                        'type_of_print': 'Category',
+                        'paper_type': 'Paper Stock',
+                        'gsm': 'GSM',
+                        'impressions_colour': 'Ink Config',
+                        'approved_by': 'Authorized Manager'
+                    })
+                    
+                    st.dataframe(
+                        view_matrix[['Order No', 'Customer Name', 'Print Qty', 'Category', 'Paper Stock', 'GSM', 'Ink Config', 'Total Amount', 'Deposit', 'Authorized Manager']],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.warning("No secure ledger rows matched your query input inside the database.")
+            
+            with tab_manage:
+                st.markdown("#### Database Field Records In-Place Editor")
+                record_to_modify = st.selectbox(
+                    "Select Order Entry Target:", 
+                    approved_orders.apply(lambda r: f"Order {r['job_order_no']} | {r['customer_name']}", axis=1).tolist()
                 )
                 
-                if is_admin:
-                    st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
-                    st.markdown("### Manage Archived Orders")
-                    selected_order_no = st.selectbox("Select Order Number to Modify or Delete:", [""] + view_matrix['Order No'].tolist())
+                if record_to_modify:
+                    selected_idx = approved_orders.apply(lambda r: f"Order {r['job_order_no']} | {r['customer_name']}", axis=1).tolist().index(record_to_modify)
+                    row_data = approved_orders.iloc[selected_idx]
                     
-                    if selected_order_no:
-                        target_row = approved_orders[approved_orders['job_order_no'] == selected_order_no].iloc[0]
-                        with st.expander(f"Edit or Delete Job Order: {selected_order_no}"):
-                            with st.form(key=f"edit_form_{target_row['id']}"):
-                                e_qty = st.number_input("Print Quantity", value=int(target_row['qty_to_print']), step=100)
-                                e_amt = st.number_input("Total Amount", value=float(target_row['total_amount']), step=50.0)
+                    with st.form(f"modify_form_{row_data['id']}"):
+                        st.markdown(f"**Modifying Internal System Row Reference ID:** `{row_data['id']}`")
+                        edit_customer = st.text_input("Customer Name", value=row_data['customer_name'])
+                        edit_qty = st.number_input("Quantity to Print", value=int(row_data['qty_to_print']), min_value=1)
+                        edit_amount = st.number_input("Total Amount", value=float(row_data['total_amount']), min_value=0.0)
+                        
+                        col_action1, col_action2 = st.columns(2)
+                        
+                        save_mods = col_action1.form_submit_button("Commit Entry Updates", use_container_width=True)
+                        if save_mods:
+                            try:
+                                supabase.table('job_orders').update({
+                                    "customer_name": sanitize_string(edit_customer),
+                                    "qty_to_print": int(edit_qty),
+                                    "total_amount": float(edit_amount)
+                                }).eq('id', row_data['id']).execute()
+                                st.success("Changes permanently committed to database.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Write operation failure: {str(e)}")
                                 
-                                c_upd, c_del = st.columns(2)
-                                if c_upd.form_submit_button("💾 Save Changes", use_container_width=True):
-                                    try:
-                                        supabase.table('job_orders').update({
-                                            "qty_to_print": int(e_qty),
-                                            "total_amount": float(e_amt)
-                                        }).eq('id', target_row['id']).execute()
-                                        st.success(f"Order {selected_order_no} updated successfully.")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Update failed: {str(e)}")
-                                        
-                                if c_del.form_submit_button("🗑️ Delete Order", type="secondary", use_container_width=True):
-                                    try:
-                                        supabase.table('job_orders').delete().eq('id', target_row['id']).execute()
-                                        st.warning(f"Order {selected_order_no} permanently deleted.")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Deletion failed: {str(e)}")
-            else:
-                st.warning("No secure ledger rows matched your query input inside the database.")
+                        delete_entry = col_action2.form_submit_button("DELETE ORDER PERMANENTLY", use_container_width=True, type="secondary")
+                        if delete_entry:
+                            try:
+                                supabase.table('job_orders').delete().eq('id', row_data['id']).execute()
+                                st.warning("Order record wiped out from vault.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Delete operation failure: {str(e)}")
 
     # --- MODE 5: PRODUCTION LAYOUT BUILDER ---
     elif app_mode == "Production Layout Builder":
@@ -545,7 +555,6 @@ else:
                 st.markdown('</div>', unsafe_allow_html=True)
                 
             with col_sum:
-                # REPAIRED AND CLOSED F-STRING BLOCK
                 st.markdown(f"""
                 <div class="ticket-container">
                     <div class="ticket-title">Production Work Ticket Blueprint</div>
@@ -553,69 +562,64 @@ else:
                     <div class="ticket-field"><span class="ticket-label">Format:</span> {matched_order['type_of_print']} | {matched_order['material_source']}</div>
                     <div class="ticket-field"><span class="ticket-label">Description:</span> {matched_order['job_description'] if matched_order['job_description'] else 'No special description provided.'}</div>
                     <div class="ticket-field"><span class="ticket-label">Print Size:</span> {matched_order['print_size']} (Trimmed: {matched_order['finished_print_size']})</div>
-                    <div class="ticket-field"><span class="ticket-label">Paper Type:</span> {matched_order['paper_type']} ({matched_order['gsm']})</div>
-                    <div class="ticket-field"><span class="ticket-label">Color Config:</span> {matched_order['impressions_colour']}</div>
+                    <div class="ticket-field"><span class="ticket-label">Stock Required:</span> {matched_order['paper_type']} | {matched_order['gsm']} | Size: {matched_order['paper_size']}</div>
+                    <div class="ticket-field"><span class="ticket-label">Colors / Ink:</span> {matched_order['paper_colour']} Paper — {matched_order['impressions_colour']} Run</div>
+                    <div class="ticket-field"><span class="ticket-label">Finishing Bind:</span> {matched_order['binding_type'] if matched_order['binding_type'] else 'None'}</div>
+                    <div class="ticket-field"><span class="ticket-label">Lamination Spec:</span> {matched_order['laminating_type'] if matched_order['laminating_type'] else 'None'}</div>
+                    <div class="ticket-field"><span class="ticket-label">Delivery Target:</span> {matched_order['delivery_mode']} by {matched_order['date_of_collection']}</div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-                st.markdown("### Injection Scheduling Trigger")
-                layout_start_date = st.date_input("Target Queue Injection Start Date", value=datetime.now().date())
-                
-                if st.button("🚀 INJECT INTO ACTIVE MACHINE QUEUES", use_container_width=True):
-                    job_payload = {
-                        "name": job_name,
-                        "sales_rep": sales_rep,
-                        "total_qty": int(order_qty),
-                        "type_id": int(type_id),
-                        "components": comp,
-                        "finishing_machines": fin_route,
-                        "total_val": float(total_val),
-                        "start_date": layout_start_date
-                    }
-                    
-                    # Core configuration rule validation
-                    is_valid = all(len(c['machines']) > 0 for c in comp) and len(fin_route) > 0
-                    if is_valid:
-                        add_multi_part_job(job_payload)
-                        st.success("Production stream properties successfully deployed to live floor scheduling lines.")
-                        st.rerun()
-                    else:
-                        st.error("Configuration Failure: Please allocate at least one machine for both printing segments and finishing sequences.")
 
-    # --- MODE 6: SHOP FLOOR CONTROL ---
-    elif app_mode == "Shop Floor Control":
-        st.markdown('<div class="section-header">Live Factory Floor Routing & Queue Streams</div>', unsafe_allow_html=True)
-        df = get_db_jobs()
-        if df.empty:
-            st.info("No active machine runs or operations are currently detected on the line boards.")
-        else:
-            df['start_time'] = pd.to_datetime(df['start_time'], utc=True, format='mixed')
-            df['finish_time'] = pd.to_datetime(df['finish_time'], utc=True, format='mixed')
-            
-            st.markdown("### Factory Production Scheduling Streams")
-            unique_jobs = df['tracking_id'].unique()
-            
-            for tid in unique_jobs:
-                job_subset = df[df['tracking_id'] == tid].sort_values(by='start_time')
-                parent_job_name = job_subset.iloc[0]['job_name']
-                sales_lead = job_subset.iloc[0]['sales_rep']
-                total_qty = job_subset.iloc[0]['quantity']
+                st.markdown('<div class="summary-box">', unsafe_allow_html=True)
+                st.markdown("<p style='font-size:1.25rem; font-weight:700; margin-top:0;'>Deployment Controls</p>", unsafe_allow_html=True)
+                start_date = st.date_input("Target Production Start Date", min_value=datetime.today().date())
                 
-                with st.expander(f"Job: {parent_job_name} | ID: {tid} | Lead: {sales_lead} | Volume: {total_qty:,} Units"):
-                    st.markdown('<div class="job-rollup-card">', unsafe_allow_html=True)
-                    
-                    for idx, run_row in job_subset.iterrows():
-                        st.markdown(f"""
-                        <div class="stream-row-item">
-                            <div>
-                                <strong>Station Alloc:</strong> {run_row['machine']} <br>
-                                <span style="color:#64748b;">Target Volume Run: {int(run_row['impressions']):,} impressions</span>
-                            </div>
-                            <div style="text-align:right;">
-                                <strong>Timeline Boundary:</strong> {run_row['start_time'].strftime('%b %d, %H:%M')} to {run_row['finish_time'].strftime('%b %d, %H:%M')} <br>
-                                <span style="color:#059669; font-weight:600;">Stage Value allocation: {CURRENCY}{run_row['contract_value']:,.2f}</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                    st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
+                st.markdown(f"**Target Units:** {order_qty:,}")
+                st.markdown(f"**Combined Value:** {CURRENCY}{total_val:,.2f}")
+                st.markdown(f"**Authorized By:** `{matched_order['approved_by']}`")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("DISPATCH TO FINITE QUEUES", use_container_width=True):
+                    if job_name and fin_route and any(c['machines'] for c in comp):
+                        add_multi_part_job({
+                            "name": job_name, "sales_rep": sales_rep, "total_qty": order_qty, 
+                            "total_val": total_val, "start_date": start_date, "type_id": type_id, 
+                            "components": comp, "finishing_machines": fin_route
+                        })
+                        st.success("Successfully injected into floor scheduling buffers!")
+                    else:
+                        st.error("Missing Parameters: Please configure at least one print asset and finishing asset track sequence.")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- MODE 6: SHOP FLOOR CONTROL (SCRAP TRANSACTION CONTROL) ---
+    elif app_mode == "Shop Floor Control":
+        st.markdown('<div class="section-header">Shop Floor Capacity Routing & Incident Control</div>', unsafe_allow_html=True)
+        
+        df_jobs = get_db_jobs()
+        if df_jobs.empty:
+            st.info("The floor routing buffer database is completely clean. No pending machine allocations found.")
+        else:
+            st.markdown("### Active Live Machine Routing Queues")
+            st.dataframe(df_jobs[['tracking_id', 'job_name', 'machine', 'impressions', 'start_time', 'finish_time', 'contract_value']], use_container_width=True, hide_index=True)
+            
+            st.markdown("<br><br>", unsafe_allow_html=True)
+            st.markdown('<div style="border: 2px solid #ef4444; border-radius: 12px; padding: 1.5rem; background-color: #fef2f2;">', unsafe_allow_html=True)
+            st.markdown("<h4 style='color: #b91c1c; margin-top: 0;'>CRITICAL OPERATION ZONE: SCRAP ALL LIVE SCHEDULED ORDERS</h4>", unsafe_allow_html=True)
+            st.markdown("<p style='color: #7f1d1d; font-size: 0.85rem;'>Executing this routine clears out all active machine-loaded pipelines transaction rows inside the 'jobs' database table. This action has <strong>zero structural influence</strong> on your fixed system configuration array registries or peripheral ledger tracking files.</p>", unsafe_allow_html=True)
+            
+            if not is_admin:
+                st.warning("Action Locked: This structural emergency utility demands specialized administrative permissions.")
+            else:
+                scrap_input = st.text_input("Type 'SCRAP PLAN' to unlock the emergency flush routine:", "").strip()
+                btn_scrap = st.button("CLEAR ALL TRANSACTIONAL PRODUCTION SCHEDULERS", type="primary", use_container_width=True, disabled=(scrap_input != "SCRAP PLAN"))
+                
+                if btn_scrap:
+                    try:
+                        # Wipe out row transactions entirely from the jobs routing table without altering arrays or schemas
+                        supabase.table('jobs').delete().neq('tracking_id', 'FORCE_EMPTY_MATCH_WILDCARD').execute()
+                        st.success("Emergency Override Complete: Floor schedule buffers successfully cleared.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Wipe operation aborted: {str(e)}")
+            st.markdown('</div>', unsafe_allow_html=True)
