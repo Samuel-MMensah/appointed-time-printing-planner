@@ -386,12 +386,12 @@ if "app_mode" not in st.session_state:
 
 # Corporate Unified Aesthetic Icons Registry
 MODULE_ICONS = {
-    "Command Center": "⊙",
-    "Shop Floor Control": "☵",
-    "Production Layout Builder": "⎋",
-    "Raise Job Order": "📋",
-    "Authorization Center": "✓",
-    "Approved Orders Archive": "📁"
+    "Command Center",
+    "Shop Floor Control",
+    "Production Layout Builder",
+    "Raise Job Order",
+    "Authorization Center",
+    "Approved Orders Archive"
 }
 
 with st.sidebar:
@@ -418,7 +418,7 @@ with st.sidebar:
         is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"]) if st.session_state.authenticated else False
         is_frontdesk = "frontdesk" in user_email if st.session_state.authenticated else False
         
-        st.markdown("### 🛠️ ERP WORKSPACE MODULES")
+        st.markdown("### ERP WORKSPACE MODULES")
         
         ops_modules = ["Command Center", "Shop Floor Control"]
         if is_admin:
@@ -431,7 +431,7 @@ with st.sidebar:
         # --- 5A. PLANT OPERATIONS SECTION CARD ---
         st.markdown(f"""
         <div class="sidebar-card">
-            <div class="sidebar-header-text">📈 Plant Operations</div>
+            <div class="sidebar-header-text">Plant Operations</div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -447,7 +447,7 @@ with st.sidebar:
         # --- 5B. ADMINISTRATION PANEL SECTION CARD ---
         st.markdown(f"""
         <div class="sidebar-card">
-            <div class="sidebar-header-text">💼 Administration Panel</div>
+            <div class="sidebar-header-text">Administration Panel</div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -671,14 +671,14 @@ else:
                         e_qty = st.number_input("Print Quantity", value=int(target_row['qty_to_print']), step=100)
                         e_amt = st.number_input("Total Amount", value=float(target_row['total_amount']), step=50.0)
                         c_upd, c_del = st.columns(2)
-                        if c_upd.form_submit_button(" 💾 Save Changes", use_container_width=True):
+                        if c_upd.form_submit_button("Save Changes", use_container_width=True):
                             try:
                                 supabase.table('job_orders').update({"qty_to_print": int(e_qty), "total_amount": float(e_amt)}).eq('id', target_row['id']).execute()
                                 st.success(f"Order {selected_order_no} updated.")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Update failed: {str(e)}")
-                        if c_del.form_submit_button(" 🗑️ Delete Order", type="secondary", use_container_width=True):
+                        if c_del.form_submit_button("Delete Order", type="secondary", use_container_width=True):
                             try:
                                 supabase.table('job_orders').delete().eq('id', target_row['id']).execute()
                                 st.warning(f"Order {selected_order_no} permanently deleted.")
@@ -819,7 +819,7 @@ else:
                 paginated_tids = unique_tracking_ids[start_idx:end_idx]
                 
                 # --- RENDER TIMELINE CHART ---
-                st.markdown("### 📊 Shop Floor Timeline Plot")
+                st.markdown("### Shop Floor Timeline Plot")
                 timeline_data = jobs_df[jobs_df['tracking_id'].isin(paginated_tids)].copy()
                 
                 if not timeline_data.empty:
@@ -894,7 +894,7 @@ else:
                     st.markdown('</div>', unsafe_allow_html=True)
                     
                     if is_admin:
-                        if st.button("🗑️ Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
+                        if st.button("Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
                             try:
                                 supabase.table('jobs').delete().eq('tracking_id', tid).execute()
                                 st.success(f"Production schedule {tid} successfully removed.")
