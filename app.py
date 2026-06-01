@@ -386,12 +386,12 @@ if "app_mode" not in st.session_state:
 
 # Corporate Unified Aesthetic Icons Registry
 MODULE_ICONS = {
-    "Command Center",
-    "Shop Floor Control",
-    "Production Layout Builder",
-    "Raise Job Order",
-    "Authorization Center",
-    "Approved Orders Archive"
+    "Command Center": "⊙",
+    "Shop Floor Control": "☵",
+    "Production Layout Builder": "⎋",
+    "Raise Job Order": "📋",
+    "Authorization Center": "✓",
+    "Approved Orders Archive": "📁"
 }
 
 with st.sidebar:
