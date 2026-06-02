@@ -853,3 +853,20 @@ if st.session_state.authenticated:
                                 <strong>Station Alloc:</strong> {run_row['machine']} <br>
                                 <span style="color:#64748b;">Target Volume Run: {int(run_row['impressions']):,} impressions</span>
                             </div>
+                            <div style="text-align:right;">
+                                <strong>Timeline Boundary:</strong> {s_str} to {f_str} <br>
+                                <span style="color:#059669; font-weight:600;">Stage Value allocation: {CURRENCY}{run_row['contract_value']:,.2f}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    if is_admin:
+                        if st.button("Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
+                            try:
+                                supabase.table('jobs').delete().eq('tracking_id', tid).execute()
+                                st.success(f"Production schedule {tid} successfully removed.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to clear job sequence: {str(e)}")
