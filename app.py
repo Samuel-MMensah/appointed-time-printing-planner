@@ -383,7 +383,7 @@ def generate_pdf_manifest(ticket):
     header_data = [
         [
             Paragraph("<b>APPOINTED TIME PRINTING LTD.</b><br/>PO BOX AC 56 Art Centre Accra<br/>Tel: 0302 661704/6", normal_style),
-            Paragraph(f"<font size=10 color='#64748b'>JOB ORDER / WAYBILL NO</font><br/><font size=14><b>{ticket.get('job_order_no', 'PENDING')}</b></font>", ParagraphStyle(name='R', parent=styles['Normal'], alignment=2))
+            Paragraph(f"<font size=10 color='#64748b'>JOB ORDER NO</font><br/><font size=14><b>{ticket.get('job_order_no', 'PENDING')}</b></font>", ParagraphStyle(name='R', parent=styles['Normal'], alignment=2))
         ]
     ]
     t_header = Table(header_data, colWidths=[3.5*inch, 3.5*inch])
@@ -806,7 +806,7 @@ elif app_mode == "Raise Job Order":
         pdf_buffer = generate_pdf_manifest(ticket)
         st.markdown("<br>", unsafe_allow_html=True)
         st.download_button(
-            label="EXPORT OFFICIAL PDF MANIFEST",
+            label="EXPORT PDF",
             data=pdf_buffer,
             file_name=f"Manifest_{ticket.get('job_order_no', 'PENDING')}.pdf",
             mime="application/pdf",
