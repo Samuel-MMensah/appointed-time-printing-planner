@@ -45,189 +45,188 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700;800&display=swap');
 html, body, [class*="css"] {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    background-color: #f8fafc;
-    color: #0f172a;
+font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+background-color: #f8fafc;
+color: #0f172a;
 }
 .main-title {
-    font-size: 2.5rem;
-    font-weight: 800;
-    color: #0f172a;
-    margin-bottom: 0.25rem;
-    letter-spacing: -0.03em;
+font-size: 2.5rem;
+font-weight: 800;
+color: #0f172a;
+margin-bottom: 0.25rem;
+letter-spacing: -0.03em;
 }
 .main-subtitle {
-    font-size: 1rem;
-    color: #64748b;
-    margin-bottom: 2rem;
-    font-weight: 400;
+font-size: 1rem;
+color: #64748b;
+margin-bottom: 2rem;
+font-weight: 400;
 }
 .section-header {
-    font-size: 1.4rem;
-    font-weight: 700;
-    color: #1e293b;
-    margin-top: 2.25rem;
-    margin-bottom: 1.25rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    letter-spacing: -0.01em;
+font-size: 1.4rem;
+font-weight: 700;
+color: #1e293b;
+margin-top: 2.25rem;
+margin-bottom: 1.25rem;
+display: flex;
+align-items: center;
+gap: 0.5rem;
+letter-spacing: -0.01em;
 }
 .planner-card {
-    background: #ffffff;
-    padding: 2rem;
-    border-radius: 16px;
-    border: 1px solid #e2e8f0;
-    box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.03), 0 2px 4px -2px rgba(15, 23, 42, 0.03);
-    margin-bottom: 1rem;
+background: #ffffff;
+padding: 2rem;
+border-radius: 16px;
+border: 1px solid #e2e8f0;
+box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.03), 0 2px 4px -2px rgba(15, 23, 42, 0.03);
+margin-bottom: 1rem;
 }
 .summary-box {
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-    color: #ffffff;
-    padding: 2rem;
-    border-radius: 16px;
-    box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.1);
+background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+color: #ffffff;
+padding: 2rem;
+border-radius: 16px;
+box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.1);
 }
 .metric-card {
-    background: #ffffff;
-    padding: 1.5rem;
-    border-radius: 14px;
-    border: 1px solid #e2e8f0;
-    border-bottom: 4px solid #0f172a;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.01);
-    text-align: left;
+background: #ffffff;
+padding: 1.5rem;
+border-radius: 14px;
+border: 1px solid #e2e8f0;
+border-bottom: 4px solid #0f172a;
+box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.01);
+text-align: left;
 }
 .metric-label {
-    font-size: 0.75rem;
-    color: #64748b;
-    text-transform: uppercase;
-    font-weight: 700;
-    letter-spacing: 0.06em;
+font-size: 0.75rem;
+color: #64748b;
+text-transform: uppercase;
+font-weight: 700;
+letter-spacing: 0.06em;
 }
 .metric-value {
-    font-size: 1.85rem;
-    font-weight: 800;
-    color: #0f172a;
-    margin-top: 0.25rem;
-    letter-spacing: -0.02em;
+font-size: 1.85rem;
+font-weight: 800;
+color: #0f172a;
+margin-top: 0.25rem;
+letter-spacing: -0.02em;
 }
 .ticket-container {
-    background-color: #f8fafc;
-    border: 1px solid #cbd5e1;
-    border-radius: 12px;
-    padding: 1.25rem;
-    margin-bottom: 1.5rem;
+background-color: #f8fafc;
+border: 1px solid #cbd5e1;
+border-radius: 12px;
+padding: 1.25rem;
+margin-bottom: 1.5rem;
 }
 .ticket-title {
-    font-size: 0.85rem;
-    font-weight: 700;
-    color: #0f172a;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.75rem;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
+font-size: 0.85rem;
+font-weight: 700;
+color: #0f172a;
+text-transform: uppercase;
+letter-spacing: 0.05em;
+margin-bottom: 0.75rem;
+display: flex;
+align-items: center;
+gap: 0.25rem;
 }
 .ticket-field {
-    font-size: 0.85rem;
-    color: #334155;
-    margin-bottom: 0.35rem;
+font-size: 0.85rem;
+color: #334155;
+margin-bottom: 0.35rem;
 }
 .ticket-label {
-    font-weight: 600;
-    color: #64748b;
+font-weight: 600;
+color: #64748b;
 }
 .job-rollup-card {
-    background: #ffffff;
-    padding: 1.25rem;
-    border-radius: 10px;
-    border: 1px solid #e2e8f0;
-    border-left: 5px solid #0f172a;
-    margin-bottom: 0.75rem;
+background: #ffffff;
+padding: 1.25rem;
+border-radius: 10px;
+border: 1px solid #e2e8f0;
+border-left: 5px solid #0f172a;
+margin-bottom: 0.75rem;
 }
 .stream-row-item {
-    padding: 0.65rem 0;
-    border-bottom: 1px solid #f1f5f9;
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.875rem;
+padding: 0.65rem 0;
+border-bottom: 1px solid #f1f5f9;
+display: flex;
+justify-content: space-between;
+font-size: 0.875rem;
 }
 .stream-row-item:last-child {
-    border-bottom: none;
+border-bottom: none;
 }
 .stRadio > label {
-    font-weight: 600 !important;
-    color: #1e293b !important;
+font-weight: 600 !important;
+color: #1e293b !important;
 }
 /* --- REFINED SIDEBAR CONTAINER CARDS & INTERACTION LAYERS --- */
 .sidebar-card {
-    background: #ffffff;
-    padding: 1.25rem;
-    border-radius: 12px;
-    border: 1px solid #e2e8f0;
-    margin-bottom: 1.25rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+background: #ffffff;
+padding: 1.25rem;
+border-radius: 12px;
+border: 1px solid #e2e8f0;
+margin-bottom: 1.25rem;
+box-shadow: 0 1px 3px rgba(0,0,0,0.02);
 }
 .sidebar-header-text {
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: #475569;
-    margin-bottom: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    border-bottom: 1px solid #f1f5f9;
-    padding-bottom: 0.5rem;
+font-size: 0.75rem;
+font-weight: 700;
+color: #475569;
+margin-bottom: 0.75rem;
+text-transform: uppercase;
+letter-spacing: 0.07em;
+display: flex;
+align-items: center;
+gap: 0.5rem;
+border-bottom: 1px solid #f1f5f9;
+padding-bottom: 0.5rem;
 }
 .sidebar-btn-active {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    padding: 0.65rem 0.85rem;
-    background-color: #0f172a;
-    color: #ffffff !important;
-    border-radius: 8px;
-    font-size: 0.875rem;
-    font-weight: 600;
-    margin-bottom: 0.35rem;
-    border: none;
-    text-align: left;
+display: flex;
+align-items: center;
+width: 100%;
+padding: 0.65rem 0.85rem;
+background-color: #0f172a;
+color: #ffffff !important;
+border-radius: 8px;
+font-size: 0.875rem;
+font-weight: 600;
+margin-bottom: 0.35rem;
+border: none;
+text-align: left;
 }
 .sidebar-btn-inactive {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    padding: 0.65rem 0.85rem;
-    background-color: transparent;
-    color: #334155 !important;
-    border-radius: 8px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    margin-bottom: 0.35rem;
-    border: none;
-    text-align: left;
-    transition: all 0.2s ease;
-    cursor: pointer;
+display: flex;
+align-items: center;
+width: 100%;
+padding: 0.65rem 0.85rem;
+background-color: transparent;
+color: #334155 !important;
+border-radius: 8px;
+font-size: 0.875rem;
+font-weight: 500;
+margin-bottom: 0.35rem;
+border: none;
+text-align: left;
+transition: all 0.2s ease;
+cursor: pointer;
 }
 .sidebar-btn-inactive:hover {
-    background-color: #f1f5f9;
-    color: #0f172a !important;
-    padding-left: 1.05rem;
+background-color: #f1f5f9;
+color: #0f172a !important;
+padding-left: 1.05rem;
 }
 .sidebar-icon {
-    margin-right: 0.65rem;
-    font-size: 1rem;
-    display: inline-block;
-    width: 1.25rem;
-    text-align: center;
+margin-right: 0.65rem;
+font-size: 1rem;
+display: inline-block;
+width: 1.25rem;
+text-align: center;
 }
-
 /* --- SECURELY ELIMINATE STREAMLIT FORM CAPTION INSTRUCTIONS --- */
 [data-testid="stFormSubmitInstructions"] {
-    display: none !important;
+display: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
