@@ -22,7 +22,6 @@ st.set_page_config(
 )
 
 # --- 2. GLOBAL SETUP & MACHINE REGISTRY ---
-# STRICTLY PRESERVED: Do not alter operational parameters.
 CURRENCY = "GH₵"
 SHIFT_START_HOUR = 8
 SHIFT_END_HOUR = 17
@@ -168,7 +167,6 @@ html, body, [class*="css"] {
     font-weight: 600 !important;
     color: #1e293b !important;
 }
-/* --- REFINED SIDEBAR CONTAINER CARDS & INTERACTION LAYERS --- */
 .sidebar-card {
     background: #ffffff;
     padding: 1.25rem;
@@ -190,9 +188,13 @@ html, body, [class*="css"] {
     border-bottom: 1px solid #f1f5f9;
     padding-bottom: 0.5rem;
 }
-/* --- SECURELY ELIMINATE STREAMLIT FORM CAPTION INSTRUCTIONS --- */
+
+/* --- SECURELY ELIMINATE STREAMLIT FORM CAPTION INSTRUCTIONS & ENTER KEY LABELS --- */
 [data-testid="stFormSubmitInstructions"],
-[data-testid="stWidgetFormInstruction"] {
+[data-testid="stWidgetFormInstruction"],
+[data-testid="stForm"] small,
+.st-emotion-cache-1px78vs,
+.st-emotion-cache-zt5gwb {
     display: none !important;
 }
 </style>
@@ -357,12 +359,8 @@ def add_multi_part_job(job_data):
     except Exception as e:
         st.error(f"Database insertion unauthorized or broken: {str(e)}")
 
-# --- 4.5. ADDITIVE COMPONENT: NATIVE PDF VECTOR EXPORT ENGINE ---
+# --- 4.5. PDF VECTOR EXPORT ENGINE ---
 def generate_pdf_manifest(ticket):
-    """
-    Programmatic ReportLab engine to compile the job order into a high-fidelity
-    industrial manifest matching ALISA HOTEL.pdf layout specifications perfectly.
-    """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     elements = []
@@ -374,16 +372,15 @@ def generate_pdf_manifest(ticket):
     small_grey = ParagraphStyle('SmallGrey', parent=styles['Normal'], fontName='Helvetica', fontSize=7, textColor=colors.HexColor("#64748b"))
 
     def cb(val, match_str):
-        """Helper to return programmatic vector checkbox"""
         if isinstance(val, str) and match_str.upper() in val.upper():
             return "[X]"
         return "[  ]"
 
-    # 1. Header Block
+    # Header Block
     header_data = [
         [
             Paragraph("<b>APPOINTED TIME PRINTING LTD.</b><br/>PO BOX AC 56 Art Centre Accra<br/>Tel: 0302 661704/6", normal_style),
-            Paragraph(f"<font size=10 color='#64748b'>JOB ORDER NO</font><br/><font size=14><b>{ticket.get('job_order_no', 'PENDING')}</b></font>", ParagraphStyle(name='R', parent=styles['Normal'], alignment=2))
+            Paragraph(f"<font size=10 color='#64748b'>JOB ORDER / WAYBILL NO</font><br/><font size=14><b>{ticket.get('job_order_no', 'PENDING')}</b></font>", ParagraphStyle(name='R', parent=styles['Normal'], alignment=2))
         ]
     ]
     t_header = Table(header_data, colWidths=[3.5*inch, 3.5*inch])
@@ -395,7 +392,7 @@ def generate_pdf_manifest(ticket):
     elements.append(t_header)
     elements.append(Spacer(1, 12))
 
-    # 2. Customer & Financial Grid
+    # Customer & Financial Grid
     total = float(ticket.get('total_amount', 0))
     deposit = float(ticket.get('deposit_amount', 0))
     balance = total - deposit
@@ -418,7 +415,7 @@ def generate_pdf_manifest(ticket):
     elements.append(t_cust)
     elements.append(Spacer(1, 12))
 
-    # 3. Categorical Checkboxes
+    # Categorical Checkboxes
     type_print = ticket.get('type_of_print', '')
     mat_source = ticket.get('material_source', '')
     
@@ -435,7 +432,7 @@ def generate_pdf_manifest(ticket):
     elements.append(t_cat)
     elements.append(Spacer(1, 12))
 
-    # 4. Job Description Array
+    # Job Description Array
     elements.append(Paragraph("JOB DESCRIPTION", small_grey))
     desc_data = [[Paragraph(str(ticket.get('job_description', '')), normal_style)]]
     t_desc = Table(desc_data, colWidths=[7.0*inch], rowHeights=[1.2*inch])
@@ -447,13 +444,12 @@ def generate_pdf_manifest(ticket):
     elements.append(t_desc)
     elements.append(Spacer(1, 6))
 
-    # Size Spec
     size_data = [[Paragraph("PRINT SIZE: " + str(ticket.get('print_size', '')), normal_style), Paragraph("FINISHED PRINT SIZE: " + str(ticket.get('finished_print_size', '')), normal_style)]]
     t_size = Table(size_data, colWidths=[3.5*inch, 3.5*inch])
     elements.append(t_size)
     elements.append(Spacer(1, 12))
 
-    # 5. Material Table Grid
+    # Material Table Grid
     mat_grid = [
         [Paragraph("Material Description (Paper)", small_grey), Paragraph("GSM", small_grey), Paragraph("Size", small_grey), Paragraph("Paper Colour", small_grey)],
         [Paragraph(str(ticket.get('paper_type', '-')), normal_style), Paragraph(str(ticket.get('gsm', '-')), normal_style), Paragraph(str(ticket.get('paper_size', '-')), normal_style), Paragraph(str(ticket.get('paper_colour', '-')), normal_style)]
@@ -468,7 +464,7 @@ def generate_pdf_manifest(ticket):
     elements.append(t_mat)
     elements.append(Spacer(1, 12))
 
-    # 6. Finishing Sub-Tables (Auxiliary Specs)
+    # Finishing Sub-Tables
     bind_type = str(ticket.get('binding_type', ''))
     lam_type = str(ticket.get('laminating_type', ''))
     del_mode = str(ticket.get('delivery_mode', ''))
@@ -488,7 +484,7 @@ def generate_pdf_manifest(ticket):
     elements.append(t_fin)
     elements.append(Spacer(1, 30))
 
-    # 7. Authorization Footer Block
+    # Authorization Footer Block
     footer_data = [
         [Paragraph("Prepared by: .......................................", normal_style), Paragraph("Sign: .......................", normal_style), Paragraph(f"Date: {ticket.get('order_date', '')}", normal_style)],
         [Paragraph("Authorized by: .......................................", normal_style), Paragraph("Sign: .......................", normal_style), Paragraph("Approved Date: .......................", normal_style)],
@@ -511,7 +507,6 @@ if "authenticated" not in st.session_state:
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "Command Center"
 
-# Corporate Unified Aesthetic Icons Registry
 MODULE_ICONS = {
     "Command Center": "   ⊙   ",
     "Shop Floor Control": "   ☵   ",
@@ -521,7 +516,6 @@ MODULE_ICONS = {
     "Approved Orders Archive": "   📁   "
 }
 
-# --- UN-AUTHENTICATED MAIN PAGE VIEW ---
 if not st.session_state.authenticated:
     st.markdown("<div style='margin-top: 5rem;'></div>", unsafe_allow_html=True)
     st.markdown("<h2 style='text-align: center; color: #0f172a; margin-bottom: 2rem;'>System Authentication</h2>", unsafe_allow_html=True)
@@ -543,17 +537,14 @@ if not st.session_state.authenticated:
                         st.rerun()
                 except Exception:
                     st.error("Authentication Denied: Invalid credentials.")
-    # Halt execution to block the workspace from rendering
     st.stop()
 
-# --- AUTHORIZED WORKSPACE ---
 with st.sidebar:
     st.write(f"Logged in as: `{st.session_state.user_email}`")
     st.markdown("<br><hr style='margin:0.5rem 0;'>", unsafe_allow_html=True)
     
     user_email = st.session_state.user_email.lower()
     is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"])
-    is_frontdesk = "frontdesk" in user_email
     
     st.markdown("### ERP WORKSPACE MODULES")
     
@@ -565,7 +556,7 @@ with st.sidebar:
     if is_admin:
         admin_modules += ["Authorization Center", "Approved Orders Archive"]
         
-    st.markdown(f"""
+    st.markdown("""
     <div class="sidebar-card">
         <div class="sidebar-header-text">Plant Operations</div>
     </div>
@@ -576,7 +567,7 @@ with st.sidebar:
             st.session_state.app_mode = mod
             st.rerun()
             
-    st.markdown(f"""
+    st.markdown("""
     <div class="sidebar-card">
         <div class="sidebar-header-text">Administrative Portal</div>
     </div>
@@ -592,7 +583,6 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
 
-# --- 6. CORE APP ROUTING CONTROLLER ---
 st.markdown('<div class="main-title">Appointed Time Printing Ltd.</div>', unsafe_allow_html=True)
 st.markdown('<div class="main-subtitle">Secured Capacity Planning Engine</div>', unsafe_allow_html=True)
 
@@ -633,14 +623,15 @@ if app_mode == "Command Center":
     else:
         st.info("No active machine runs detected.")
 
-# --- ROUTE 2: RAISE JOB ORDER ---
+# --- ROUTE 2: Bold / Accurate Job Order Forms ---
 elif app_mode == "Raise Job Order":
     st.markdown('<div class="section-header">Press Job Order Entry Form</div>', unsafe_allow_html=True)
     
     if "last_raised_order" not in st.session_state:
         st.session_state.last_raised_order = None
         
-    with st.form("raise_order_form"):
+    # Advanced Form clearing achieved securely via clear_on_submit parameter context
+    with st.form("raise_order_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         c_name = c1.text_input("Customer Name *")
         c_phone = c2.text_input("Telephone Number *")
@@ -729,13 +720,13 @@ elif app_mode == "Raise Job Order":
                     order_payload["order_date"] = datetime.now().strftime('%Y-%m-%d')
                     st.session_state.last_raised_order = order_payload
                     
-                    st.toast("Job Entry securely deposited inside management ledger pool successfully.", icon=" ✅ ")
+                    # Resolved Toast single character constraint requirement mapping
+                    st.toast("Job Entry securely deposited inside management ledger pool successfully.", icon="✅")
                 except Exception as e:
                     st.error(f"Failed to process order sequence entry: {str(e)}")
             else:
-                st.error(f"Transaction Blocked. The following required fields are missing or invalid: {', '.join(missing_fields)}")
+                st.error(f"Transaction Blocked. Missing required fields: {', '.join(missing_fields)}")
 
-    # REDESIGNED INDUSTRIAL PRESENTATION LAYER: IN-APP MATRIX GRID
     if st.session_state.last_raised_order is not None:
         ticket = st.session_state.last_raised_order
         
@@ -802,11 +793,10 @@ elif app_mode == "Raise Job Order":
         </div>
         """, unsafe_allow_html=True)
         
-        # UI Action Download Button implementation Hook
         pdf_buffer = generate_pdf_manifest(ticket)
         st.markdown("<br>", unsafe_allow_html=True)
         st.download_button(
-            label="EXPORT PDF",
+            label="EXPORT OFFICIAL PDF MANIFEST",
             data=pdf_buffer,
             file_name=f"Manifest_{ticket.get('job_order_no', 'PENDING')}.pdf",
             mime="application/pdf",
@@ -910,7 +900,6 @@ elif app_mode == "Approved Orders Archive" and is_admin:
             target_row = approved_orders[approved_orders['job_order_no'] == selected_order_no].iloc[0]
             with st.expander(f"Order Operations: {selected_order_no}"):
                 
-                # UI Action Download Button implementation Hook inside Data Vault
                 pdf_buffer_archived = generate_pdf_manifest(target_row.to_dict())
                 st.download_button(
                     label=f"EXPORT OFFICIAL PDF MANIFEST ({selected_order_no})",
@@ -943,7 +932,7 @@ elif app_mode == "Approved Orders Archive" and is_admin:
                         except Exception as e:
                             st.error(f"Deletion failed: {str(e)}")
 
-# --- ROUTE 5: PRODUCTION LAYOUT BUILDER ---
+# --- ROUTE 5: PRODUCTION LAYOUT BUILDER (FLOOR PLANNER) ---
 elif app_mode == "Production Layout Builder" and is_admin:
     st.markdown('<div class="section-header">Algorithmic Capacity Loading Engine Layouts</div>', unsafe_allow_html=True)
     approved_df = get_db_job_orders("Approved")
@@ -958,78 +947,81 @@ elif app_mode == "Production Layout Builder" and is_admin:
             target_no = order_options[chosen_label]
             matched_order = approved_df[approved_df['job_order_no'] == target_no].iloc[0]
             
-            col_inputs, col_sum = st.columns([7, 5])
-            with col_inputs:
-                st.markdown('<div class="planner-card">', unsafe_allow_html=True)
-                job_name_input = st.text_input("Production Flow Sequence Identity Name *", value=f"Flow for {matched_order['customer_name']}")
-                sales_rep = st.text_input("Account Executive Handler Signature", value=matched_order['created_by'])
-                start_date = st.date_input("Production Flow Horizon Start Point Base", value=datetime.now().date())
-                prod_cat = st.selectbox("Production Layout Category", ["Skillet / Box Packing", "Book / Magazine Brochure", "Flat Sheet Flyer"])
-                
-                c1, c2, c3 = st.columns(3)
-                order_qty = c1.number_input("Target Order Units", value=int(matched_order['qty_to_print']), min_value=1)
-                ups = c2.number_input("Number of Ups", value=1, min_value=1, step=1)
-                total_val = c3.number_input("Value (GH₵)", value=float(matched_order['total_amount']), min_value=0.0)
-                
-                st.markdown("#### Sequential Floor Run Mappings")
-                if prod_cat == "Book / Brochure":
-                    type_id = 1
-                    text_pages = st.number_input("Total Inner Text Pages", value=16, min_value=4, step=4)
-                    text_ups = st.number_input("Text Page Layout Signatures (Ups)", value=8, min_value=1)
-                    text_imps = (order_qty * text_pages) / text_ups
-                    st.caption(f"Calculated Text Run Load: **{int(text_imps):,} impressions** needed.")
+            # Encapsulated fully inside an additive native clearing form wrapper matrix
+            with st.form(key=f"prod_layout_form_{matched_order['job_order_no']}", clear_on_submit=True):
+                col_inputs, col_sum = st.columns([7, 5])
+                with col_inputs:
+                    st.markdown('<div class="planner-card">', unsafe_allow_html=True)
+                    job_name_input = st.text_input("Production Flow Sequence Identity Name *", value=f"Flow for {matched_order['customer_name']}")
+                    sales_rep = st.text_input("Account Executive Handler Signature", value=matched_order['created_by'])
+                    start_date = st.date_input("Production Flow Horizon Start Point Base", value=datetime.now().date())
+                    prod_cat = st.selectbox("Production Layout Category", ["Skillet / Box Packing", "Book / Magazine Brochure", "Flat Sheet Flyer"])
                     
-                    r1, r2, r3 = st.columns(3)
-                    comp = [
-                        {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Configuration", list(MACHINE_DATA.keys()))},
-                        {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Configuration", list(MACHINE_DATA.keys()))}
-                    ]
-                    fin_route = r3.multiselect("Finishing Layout Line", list(MACHINE_DATA.keys()))
-                else:
-                    type_id = ups
-                    r1, r2 = st.columns(2)
-                    comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Configuration", list(MACHINE_DATA.keys()))}]
-                    fin_route = r2.multiselect("Finishing Component Line Sequence", list(MACHINE_DATA.keys()))
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-            with col_sum:
-                st.markdown(f"""
-                <div class="ticket-container">
-                    <div class="ticket-title">Production Work Ticket Blueprint</div>
-                    <div class="ticket-field"><span class="ticket-label">Job Num:</span> {matched_order['job_order_no']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Format:</span> {matched_order['type_of_print']} | {matched_order['material_source']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Description:</span> {matched_order['job_description'] if matched_order['job_description'] else 'No special description.'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Print Size:</span> {matched_order['print_size']} (Trimmed: {matched_order['finished_print_size']})</div>
-                    <div class="ticket-field"><span class="ticket-label">Stock Required:</span> {matched_order['paper_type']} | {matched_order['gsm']} | Size: {matched_order['paper_size']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Colors:</span> {matched_order['paper_colour']} — {matched_order['impressions_colour']}</div>
-                    <div class="ticket-field"><span class="ticket-label">Finishing Bind:</span> {matched_order['binding_type'] if matched_order['binding_type'] else 'None'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Lamination:</span> {matched_order['laminating_type'] if matched_order['laminating_type'] else 'None'}</div>
-                    <div class="ticket-field"><span class="ticket-label">Delivery Target:</span> {matched_order['delivery_mode']} by {matched_order['date_of_collection']}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown('<div class="summary-box">', unsafe_allow_html=True)
-                st.markdown("#### Verification Ledger Context Summary")
-                st.markdown(f"**Sequence Key:** {job_name_input if job_name_input else 'Unnamed allocation sequence'}")
-                st.markdown(f"**Aggregate Volume Count:** {int(order_qty):,} target final pieces")
-                st.markdown(f"**Total Registered Stages:** {sum(len(c['machines']) for c in comp) + len(fin_route)} distinct structural floor routing blocks")
-                st.markdown(f"**Gross Fin Val Allocated:** {CURRENCY}{float(total_val):,.2f}")
-                
-                if st.button("PLAN", use_container_width=True, type="primary"):
-                    if not job_name_input:
-                        st.error("Operation Denied: The sequence requires an identifying title layout name.")
-                    elif sum(len(c['machines']) for c in comp) == 0:
-                        st.error("Operation Denied: You must provide at least one machine component run.")
+                    c1, c2, c3 = st.columns(3)
+                    order_qty = c1.number_input("Target Order Units", value=int(matched_order['qty_to_print']), min_value=1)
+                    ups = c2.number_input("Number of Ups (Layout density logic)", value=1, min_value=1, step=1)
+                    total_val = c3.number_input("Assigned Contract Evaluation Value (GH₵)", value=float(matched_order['total_amount']), min_value=0.0)
+                    
+                    st.markdown("#### Sequential Floor Run Mappings")
+                    if prod_cat == "Book / Magazine Brochure":
+                        type_id = 1
+                        text_pages = st.number_input("Total Inner Text Pages", value=16, min_value=4, step=4)
+                        text_ups = st.number_input("Text Page Layout Signatures (Ups)", value=8, min_value=1)
+                        text_imps = (order_qty * text_pages) / text_ups
+                        st.caption(f"Calculated Text Run Load: **{int(text_imps):,} impressions** needed.")
+                        
+                        r1, r2, r3 = st.columns(3)
+                        comp = [
+                            {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Asset Configuration", list(MACHINE_DATA.keys()))},
+                            {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Asset Configuration", list(MACHINE_DATA.keys()))}
+                        ]
+                        fin_route = r3.multiselect("Finishing Layout Line", list(MACHINE_DATA.keys()))
                     else:
-                        payload = {
-                            "name": job_name_input, "sales_rep": sales_rep, "start_date": start_date,
-                            "total_qty": order_qty, "type_id": type_id, "total_val": total_val,
-                            "components": comp, "finishing_machines": fin_route
-                        }
-                        add_multi_part_job(payload)
-                        st.success("Sequence injected. Real-time factory floor boards updated safely.")
-                        st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
+                        type_id = ups
+                        r1, r2 = st.columns(2)
+                        comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Asset Configuration", list(MACHINE_DATA.keys()))}]
+                        fin_route = r2.multiselect("Finishing Component Line Sequence", list(MACHINE_DATA.keys()))
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                with col_sum:
+                    st.markdown(f"""
+                    <div class="ticket-container">
+                        <div class="ticket-title">Production Work Ticket Blueprint</div>
+                        <div class="ticket-field"><span class="ticket-label">Job Num:</span> {matched_order['job_order_no']}</div>
+                        <div class="ticket-field"><span class="ticket-label">Format:</span> {matched_order['type_of_print']} | {matched_order['material_source']}</div>
+                        <div class="ticket-field"><span class="ticket-label">Description:</span> {matched_order['job_description'] if matched_order['job_description'] else 'No special description.'}</div>
+                        <div class="ticket-field"><span class="ticket-label">Print Size:</span> {matched_order['print_size']} (Trimmed: {matched_order['finished_print_size']})</div>
+                        <div class="ticket-field"><span class="ticket-label">Stock Required:</span> {matched_order['paper_type']} | {matched_order['gsm']} | Size: {matched_order['paper_size']}</div>
+                        <div class="ticket-field"><span class="ticket-label">Colors:</span> {matched_order['paper_colour']} — {matched_order['impressions_colour']}</div>
+                        <div class="ticket-field"><span class="ticket-label">Finishing Bind:</span> {matched_order['binding_type'] if matched_order['binding_type'] else 'None'}</div>
+                        <div class="ticket-field"><span class="ticket-label">Lamination:</span> {matched_order['laminating_type'] if matched_order['laminating_type'] else 'None'}</div>
+                        <div class="ticket-field"><span class="ticket-label">Delivery Target:</span> {matched_order['delivery_mode']} by {matched_order['date_of_collection']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown('<div class="summary-box">', unsafe_allow_html=True)
+                    st.markdown("#### Verification Ledger Context Summary")
+                    st.markdown(f"**Sequence Key:** {job_name_input if job_name_input else 'Unnamed allocation sequence'}")
+                    st.markdown(f"**Aggregate Volume Count:** {int(order_qty):,} target final pieces")
+                    st.markdown(f"**Total Registered Stages:** {sum(len(c['machines']) for c in comp) + len(fin_route)} distinct structural floor routing blocks")
+                    st.markdown(f"**Gross Fin Val Allocated:** {CURRENCY}{float(total_val):,.2f}")
+                    
+                    submit_plan = st.form_submit_button("PLAN", use_container_width=True, type="primary")
+                    if submit_plan:
+                        if not job_name_input:
+                            st.error("Operation Denied: The sequence requires an identifying title layout name.")
+                        elif sum(len(c['machines']) for c in comp) == 0:
+                            st.error("Operation Denied: You must provide at least one machine component run.")
+                        else:
+                            payload = {
+                                "name": job_name_input, "sales_rep": sales_rep, "start_date": start_date,
+                                "total_qty": order_qty, "type_id": type_id, "total_val": total_val,
+                                "components": comp, "finishing_machines": fin_route
+                            }
+                            add_multi_part_job(payload)
+                            st.success("Sequence injected. Real-time factory floor boards updated safely.")
+                            st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
 
 # --- ROUTE 6: SHOP FLOOR CONTROL ---
 elif app_mode == "Shop Floor Control":
