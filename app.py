@@ -584,7 +584,7 @@ if st.session_state.authenticated:
                     }
                     try:
                         supabase.table('job_orders').insert(order_payload).execute()
-                        st.success("Job Entry securely deposited inside management ledger pool successfully.")
+                        st.toast("Job Entry securely deposited inside management ledger pool successfully.", icon="✅")
                     except Exception as e:
                         st.error(f"Failed to process order sequence entry: {str(e)}")
                 else:
