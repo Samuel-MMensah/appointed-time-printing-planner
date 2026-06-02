@@ -547,7 +547,7 @@ else:
                 st.rerun()
                 
         st.markdown("<br><br>", unsafe_allow_html=True)
-        if st.button("Secure Logout System", use_container_width=True, type="primary"):
+        if st.button("Logout", use_container_width=True, type="primary"):
             st.session_state.authenticated = False
             st.rerun()
 
