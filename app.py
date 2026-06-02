@@ -500,7 +500,7 @@ elif app_mode == "Raise Job Order":
         pap_col = p4.text_input("Color Specs")
 
         x1, x2 = st.columns(2)
-        imp_col = x1.text_input("Impressions Run Color Mix (e.g. 4x4, 1x0)")
+        imp_col = x1.text_input("Impressions")
         d_mode = x2.selectbox("Delivery Mode", ["Company Delivery", "Client Pickup"])
 
         b_type = st.multiselect("Binding Selection", ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"])
