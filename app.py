@@ -968,11 +968,11 @@ elif app_mode == "Production Layout Builder" and is_admin:
                 
                 c1, c2, c3 = st.columns(3)
                 order_qty = c1.number_input("Target Order Units", value=int(matched_order['qty_to_print']), min_value=1)
-                ups = c2.number_input("Number of Ups (Layout density logic)", value=1, min_value=1, step=1)
-                total_val = c3.number_input("Assigned Contract Evaluation Value (GH₵)", value=float(matched_order['total_amount']), min_value=0.0)
+                ups = c2.number_input("Number of Ups", value=1, min_value=1, step=1)
+                total_val = c3.number_input("Value (GH₵)", value=float(matched_order['total_amount']), min_value=0.0)
                 
                 st.markdown("#### Sequential Floor Run Mappings")
-                if prod_cat == "Book / Magazine Brochure":
+                if prod_cat == "Book / Brochure":
                     type_id = 1
                     text_pages = st.number_input("Total Inner Text Pages", value=16, min_value=4, step=4)
                     text_ups = st.number_input("Text Page Layout Signatures (Ups)", value=8, min_value=1)
@@ -981,14 +981,14 @@ elif app_mode == "Production Layout Builder" and is_admin:
                     
                     r1, r2, r3 = st.columns(3)
                     comp = [
-                        {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Asset Configuration", list(MACHINE_DATA.keys()))},
-                        {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Asset Configuration", list(MACHINE_DATA.keys()))}
+                        {"name": "Cover", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Cover Configuration", list(MACHINE_DATA.keys()))},
+                        {"name": "Text", "impressions": float(text_imps), "machines": r2.multiselect("Text Interior Configuration", list(MACHINE_DATA.keys()))}
                     ]
                     fin_route = r3.multiselect("Finishing Layout Line", list(MACHINE_DATA.keys()))
                 else:
                     type_id = ups
                     r1, r2 = st.columns(2)
-                    comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Asset Configuration", list(MACHINE_DATA.keys()))}]
+                    comp = [{"name": "Body", "impressions": max(1.0, order_qty/ups), "machines": r1.multiselect("Primary Print Configuration", list(MACHINE_DATA.keys()))}]
                     fin_route = r2.multiselect("Finishing Component Line Sequence", list(MACHINE_DATA.keys()))
                 st.markdown('</div>', unsafe_allow_html=True)
                 
