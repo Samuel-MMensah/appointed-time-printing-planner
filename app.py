@@ -11,7 +11,7 @@ import plotly.express as px
 st.set_page_config(
     page_title="Appointed Time | Secured Enterprise Suite",
     layout="wide",
-    page_icon=" 🏢 ",
+    page_icon=None,
     initial_sidebar_state="expanded"
 )
 
@@ -392,9 +392,12 @@ MODULE_ICONS = {
     "Approved Orders Archive": " 📁 "
 }
 
-with st.sidebar:
-    st.markdown("###  Secure Access Portal")
-    if not st.session_state.authenticated:
+if not st.session_state.authenticated:
+    # Render unauthenticated centered form layout on the main canvas
+    _, center_col, _ = st.columns([1, 1.5, 1])
+    with center_col:
+        st.markdown("<br><br><br>", unsafe_allow_html=True)
+        st.markdown("### Secure Access Portal")
         with st.form("auth_form"):
             email = st.text_input("Corporate Email")
             password = st.text_input("Password", type="password")
@@ -408,13 +411,15 @@ with st.sidebar:
                         st.rerun()
                 except Exception:
                     st.error("Authentication Denied: Invalid credentials.")
-    else:
+else:
+    # Render sidebar controls exclusively when authenticated
+    with st.sidebar:
         st.write(f"Logged in as: `{st.session_state.user_email}`")
         st.markdown("<br><hr style='margin:0.5rem 0;'>", unsafe_allow_html=True)
         
-        user_email = st.session_state.user_email.lower() if st.session_state.authenticated else ""
-        is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"]) if st.session_state.authenticated else False
-        is_frontdesk = "frontdesk" in user_email if st.session_state.authenticated else False
+        user_email = st.session_state.user_email.lower()
+        is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"])
+        is_frontdesk = "frontdesk" in user_email
         
         st.markdown("### ERP WORKSPACE MODULES")
         ops_modules = ["Command Center", "Shop Floor Control"]
@@ -425,7 +430,6 @@ with st.sidebar:
         if is_admin:
             admin_modules += ["Authorization Center", "Approved Orders Archive"]
             
-        # --- 5A. PLANT OPERATIONS SECTION CARD ---
         st.markdown(f"""
             <div class="sidebar-card">
                 <div class="sidebar-header-text">Plant Operations</div>
@@ -434,12 +438,10 @@ with st.sidebar:
         
         for mod in ops_modules:
             ico = MODULE_ICONS.get(mod, "")
-            style_cls = "sidebar-btn-active" if st.session_state.app_mode == mod else "sidebar-btn-inactive"
             if st.button(f"{ico} {mod}", key=f"side_{mod}", use_container_width=True):
                 st.session_state.app_mode = mod
                 st.rerun()
                 
-        # --- 5B. ADMINISTRATIVE PORTAL SECTION CARD ---
         st.markdown(f"""
             <div class="sidebar-card">
                 <div class="sidebar-header-text">Administrative Portal</div>
@@ -448,7 +450,6 @@ with st.sidebar:
         
         for mod in admin_modules:
             ico = MODULE_ICONS.get(mod, "")
-            style_cls = "sidebar-btn-active" if st.session_state.app_mode == mod else "sidebar-btn-inactive"
             if st.button(f"{ico} {mod}", key=f"side_{mod}", use_container_width=True):
                 st.session_state.app_mode = mod
                 st.rerun()
@@ -459,13 +460,13 @@ with st.sidebar:
             st.rerun()
 
 # --- 6. CORE APP ROUTING CONTROLLER ---
-if not st.session_state.authenticated:
-    st.warning("Please sign in from the sidebar panel to view live shop queues.")
-else:
+if st.session_state.authenticated:
     st.markdown('<div class="main-title">Appointed Time Printing Ltd.</div>', unsafe_allow_html=True)
     st.markdown('<div class="main-subtitle">Secured Capacity Planning Engine</div>', unsafe_allow_html=True)
     
     app_mode = st.session_state.app_mode
+    user_email = st.session_state.user_email.lower()
+    is_admin = any(x in user_email for x in ["md", "fm", "admin", "manager"])
     
     # --- ROUTE 1: COMMAND CENTER ---
     if app_mode == "Command Center":
