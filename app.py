@@ -368,7 +368,7 @@ if not st.session_state.authenticated:
             st.markdown("<div style='text-align:center; font-weight:600; font-size:14px; margin-bottom:1rem;'>Authorized Personnel Only</div>", unsafe_allow_html=True)
             email = st.text_input("Corporate Email Address")
             password = st.text_input("Secure Password", type="password")
-            submit_login = st.form_submit_button("Authenticate Session", use_container_width=True)
+            submit_login = st.form_submit_button("Login", use_container_width=True)
             
             if submit_login and supabase:
                 try:
