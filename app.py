@@ -196,7 +196,7 @@ html, body, [class*="css"] {
     border: none;
     text-align: left;
 }
-.sidebar-btn-inactive {
+.sidebar-btn-inactive = {
     display: flex;
     align-items: center;
     width: 100%;
@@ -223,6 +223,11 @@ html, body, [class*="css"] {
     display: inline-block;
     width: 1.25rem;
     text-align: center;
+}
+
+/* --- FORM SUBMIT INSTRUCTION SUPPRESSION --- */
+[data-testid="stFormSubmitInstructions"] {
+    display: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -393,7 +398,6 @@ MODULE_ICONS = {
 }
 
 if not st.session_state.authenticated:
-    # Render unauthenticated centered form layout on the main canvas
     _, center_col, _ = st.columns([1, 1.5, 1])
     with center_col:
         st.markdown("<br><br><br>", unsafe_allow_html=True)
@@ -412,7 +416,6 @@ if not st.session_state.authenticated:
                 except Exception:
                     st.error("Authentication Denied: Invalid credentials.")
 else:
-    # Render sidebar controls exclusively when authenticated
     with st.sidebar:
         st.write(f"Logged in as: `{st.session_state.user_email}`")
         st.markdown("<br><hr style='margin:0.5rem 0;'>", unsafe_allow_html=True)
@@ -540,7 +543,6 @@ if st.session_state.authenticated:
             submit_order = st.form_submit_button("SUBMIT FOR MANAGEMENT APPROVAL", use_container_width=True)
             
             if submit_order:
-                # Compile missing fields selectively
                 missing_fields = []
                 if not c_name.strip(): missing_fields.append("Customer Name")
                 if not c_phone.strip(): missing_fields.append("Telephone Number")
