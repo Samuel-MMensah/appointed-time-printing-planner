@@ -461,7 +461,7 @@ else:
                 st.rerun()
                 
         st.markdown("<br><br>", unsafe_allow_html=True)
-        if st.button("Secure Logout System", use_container_width=True, type="primary"):
+        if st.button("Logout", use_container_width=True, type="primary"):
             st.session_state.authenticated = False
             st.rerun()
 
@@ -731,7 +731,7 @@ if st.session_state.authenticated:
                     total_val = c3.number_input("Assigned Contract Evaluation Value (GH₵)", value=float(matched_order['total_amount']), min_value=0.0)
                     
                     st.markdown("#### Sequential Floor Run Mappings")
-                    if prod_cat == "Book / Magazine Brochure":
+                    if prod_cat == "Book / Brochure":
                         type_id = 1
                         text_pages = st.number_input("Total Inner Text Pages", value=16, min_value=4, step=4)
                         text_ups = st.number_input("Text Page Layout Signatures (Ups)", value=8, min_value=1)
