@@ -445,7 +445,7 @@ if app_mode == "Command Center":
         with c1:
             st.markdown(f'<div class="metric-card"><div class="metric-label">Active Orders</div><div class="metric-value">{df["tracking_id"].nunique()}</div></div>', unsafe_allow_html=True)
         with c2:
-            st.markdown(f'<div class="metric-card"><div class="metric-label">Pipeline Contract Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.2f}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-card"><div class="metric-label">Contract Value</div><div class="metric-value">{CURRENCY}{df["contract_value"].sum():,.2f}</div></div>', unsafe_allow_html=True)
         with c3:
             books = df[df['ups'] == 1]['tracking_id'].nunique()
             st.markdown(f'<div class="metric-card"><div class="metric-label">Book Runs Queue</div><div class="metric-value">{books}</div></div>', unsafe_allow_html=True)
@@ -466,7 +466,7 @@ if app_mode == "Command Center":
             fig_rev.update_layout(margin=dict(t=10, b=10, l=10, r=10), legend=dict(orientation="h", y=-0.1))
             st.plotly_chart(fig_rev, use_container_width=True)
     else:
-        st.info("No active machine runs detected in the live database pipeline.")
+        st.info("No active machine runs detected.")
 
 # --- ROUTE 2: RAISE JOB ORDER ---
 elif app_mode == "Raise Job Order":
@@ -824,7 +824,7 @@ elif app_mode == "Production Layout Builder" and is_admin:
                 st.markdown(f"**Total Registered Stages:** {sum(len(c['machines']) for c in comp) + len(fin_route)} distinct structural floor routing blocks")
                 st.markdown(f"**Gross Fin Val Allocated:** {CURRENCY}{float(total_val):,.2f}")
 
-                if st.button("EXECUTE LIVE PIPELINE LOADING RUN", use_container_width=True, type="primary"):
+                if st.button("PLAN", use_container_width=True, type="primary"):
                     if not job_name_input:
                         st.error("Operation Denied: The sequence requires an identifying title layout name.")
                     elif sum(len(c['machines']) for c in comp) == 0:
