@@ -506,17 +506,17 @@ if st.session_state.authenticated:
         with st.form("raise_order_form"):
             c1, c2 = st.columns(2)
             c_name = c1.text_input("Customer Name *")
-            c_phone = c2.text_input("Telephone Number")
-            j_desc = st.text_area("Job Description")
+            c_phone = c2.text_input("Telephone Number *")
+            j_desc = st.text_area("Job Description *")
             
             f1, f2, f3, f4 = st.columns(4)
-            t_amt = f1.number_input("Total Contract Amount (GHS)", min_value=0.0, step=100.0)
-            d_amt = f2.number_input("Deposit Paid (GHS)", min_value=0.0, step=100.0)
-            b_due = f3.date_input("Balance Settlement Deadline")
-            q_print = f4.number_input("Total Quantity to Print *", min_value=1, step=500)
+            t_amt = f1.number_input("Total Contract Amount (GHS) *", min_value=0.0, step=100.0)
+            d_amt = f2.number_input("Deposit Paid (GHS) *", min_value=0.0, step=100.0)
+            b_due = f3.date_input("Balance Settlement Deadline *")
+            q_print = f4.number_input("Total Quantity to Print *", min_value=0, step=500)
             
             s1, s2, s3, s4 = st.columns(4)
-            t_print = s1.selectbox("Category of Print Selection", ["OFFSET", "DIGITAL PRESS", "PACKAGING"])
+            t_print = s1.selectbox("Category of Print Selection *", ["", "OFFSET", "DIGITAL PRESS", "PACKAGING"])
             m_source = s2.selectbox("Material Procurement Source", ["Client Sourced Stock", "Company Sourced Inventory"])
             p_size = s3.text_input("Raw Print Size Layout")
             f_size = s4.text_input("Finished Trimmed Size")
@@ -533,14 +533,26 @@ if st.session_state.authenticated:
             
             b_type = st.multiselect("Binding Selection", ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"])
             l_type = st.multiselect("Laminating Selection", ["Gloss Laminating", "Matt Laminating", "Soft Touch", "UV-Varnish"])
-            c_date = st.date_input("Target Date of Collection")
+            c_date = st.date_input("Target Date of Collection *")
             
             st.markdown("<br>", unsafe_allow_html=True)
             st.info(f"Job Order Handled By: {st.session_state.user_email} | Filling Date: {datetime.now().strftime('%Y-%m-%d')}")
             submit_order = st.form_submit_button("SUBMIT FOR MANAGEMENT APPROVAL", use_container_width=True)
             
             if submit_order:
-                if c_name and q_print:
+                # Compile missing fields selectively
+                missing_fields = []
+                if not c_name.strip(): missing_fields.append("Customer Name")
+                if not c_phone.strip(): missing_fields.append("Telephone Number")
+                if not j_desc.strip(): missing_fields.append("Job Description")
+                if t_amt <= 0.0: missing_fields.append("Total Contract Amount (must be greater than 0)")
+                if d_amt < 0.0: missing_fields.append("Deposit Paid")
+                if not b_due: missing_fields.append("Balance Settlement Deadline")
+                if q_print <= 0: missing_fields.append("Total Quantity to Print (must be greater than 0)")
+                if not t_print: missing_fields.append("Category of Print Selection")
+                if not c_date: missing_fields.append("Target Date of Collection")
+                
+                if not missing_fields:
                     order_payload = {
                         "customer_name": sanitize_string(c_name),
                         "telephone_number": sanitize_string(c_phone),
@@ -571,7 +583,7 @@ if st.session_state.authenticated:
                     except Exception as e:
                         st.error(f"Failed to process order sequence entry: {str(e)}")
                 else:
-                    st.error("Submission blocked. Customer Name and Print Quantity require clear declarations.")
+                    st.error(f"Submission blocked. Please review or fill in the following mandatory fields: {', '.join(missing_fields)}.")
                     
     # --- ROUTE 3: AUTHORIZATION CENTER ---
     elif app_mode == "Authorization Center" and is_admin:
@@ -841,20 +853,3 @@ if st.session_state.authenticated:
                                 <strong>Station Alloc:</strong> {run_row['machine']} <br>
                                 <span style="color:#64748b;">Target Volume Run: {int(run_row['impressions']):,} impressions</span>
                             </div>
-                            <div style="text-align:right;">
-                                <strong>Timeline Boundary:</strong> {s_str} to {f_str} <br>
-                                <span style="color:#059669; font-weight:600;">Stage Value allocation: {CURRENCY}{run_row['contract_value']:,.2f}</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    if is_admin:
-                        if st.button("Delete Scheduled Job Flow", key=f"del_sched_{tid}", use_container_width=True, type="secondary"):
-                            try:
-                                supabase.table('jobs').delete().eq('tracking_id', tid).execute()
-                                st.success(f"Production schedule {tid} successfully removed.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to clear job sequence: {str(e)}")
