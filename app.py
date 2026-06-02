@@ -12,6 +12,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+import threading
+import requests
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
@@ -26,7 +28,6 @@ CURRENCY = "GH₵"
 SHIFT_START_HOUR = 8
 SHIFT_END_HOUR = 17
 DAILY_CAPACITY_HOURS = 8.0
-
 MACHINE_DATA = {
     'SM102-CX FOUR COLOUR': {'rate': 8000, 'setup_hours': 1.5},
     'SM102-P FIVE COLOUR': {'rate': 7500, 'setup_hours': 1.5},
@@ -46,6 +47,88 @@ MACHINE_DATA = {
     'CANON DIGITAL C10000': {'rate': 6000, 'setup_hours': 0.5},
     'CANON DIGITAL C800': {'rate': 4000, 'setup_hours': 0.5},
 }
+
+# --- 2.5 ASYNCHRONOUS RESEND ENGINE ---
+def send_resend_notification(payload):
+    """Fires an isolated background thread to dispatch corporate alerts without freezing user interface."""
+    def worker(order_data):
+        api_key = st.secrets.get("RESEND_API_KEY")
+        sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+        
+        # Hardcoded Management Distribution Recipients
+        recipients = ["md@appointedtime.com.gh", "s.mensah@appointedtime.com.gh"]
+        
+        if not api_key:
+            return # Silent drop if secrets are missing to prevent application crashes
+            
+        url = "https://api.resend.com/emails"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        email_html = f"""
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #0f172a; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+            <div style="background-color: #0f172a; color: #ffffff; padding: 24px; text-align: center;">
+                <h2 style="margin: 0; font-size: 20px; letter-spacing: 0.05em;">EXECUTIVE APPROVAL REQUIRED</h2>
+                <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 13px;">Appointed Time Printing Enterprise Hub</p>
+            </div>
+            <div style="padding: 24px; background-color: #ffffff;">
+                <p style="font-size: 15px; line-height: 1.6; margin-top: 0;">A new commercial print asset has been lodged inside the sales pool ledger and requires explicit authorization sign-off before manufacturing routing slots can be calculated.</p>
+                
+                <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
+                    <tr style="background-color: #f8fafc;">
+                        <td style="padding: 10px; font-weight: 600; border-bottom: 1px solid #e2e8f0; color: #64748b;">Job Order No:</td>
+                        <td style="padding: 10px; font-weight: 700; border-bottom: 1px solid #e2e8f0; color: #0369a1;">{order_data.get('job_order_no', 'PENDING')}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; font-weight: 600; border-bottom: 1px solid #e2e8f0; color: #64748b;">Customer Account:</td>
+                        <td style="padding: 10px; font-weight: 700; border-bottom: 1px solid #e2e8f0;">{order_data.get('customer_name')}</td>
+                    </tr>
+                    <tr style="background-color: #f8fafc;">
+                        <td style="padding: 10px; font-weight: 600; border-bottom: 1px solid #e2e8f0; color: #64748b;">Contract Value:</td>
+                        <td style="padding: 10px; font-weight: 700; border-bottom: 1px solid #e2e8f0; color: #0f172a;">GH₵ {order_data.get('total_amount'):,.2f}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; font-weight: 600; border-bottom: 1px solid #e2e8f0; color: #64748b;">Deposit Received:</td>
+                        <td style="padding: 10px; font-weight: 700; border-bottom: 1px solid #e2e8f0; color: #16a34a;">GH₵ {order_data.get('deposit_amount'):,.2f}</td>
+                    </tr>
+                    <tr style="background-color: #f8fafc;">
+                        <td style="padding: 10px; font-weight: 600; border-bottom: 1px solid #e2e8f0; color: #64748b;">Quantity/Category:</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">{order_data.get('qty_to_print'):,} units ({order_data.get('type_of_print')})</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; font-weight: 600; border-bottom: 1px solid #e2e8f0; color: #64748b;">Account Executive:</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #475569;">{order_data.get('created_by')}</td>
+                    </tr>
+                </table>
+                
+                <div style="background-color: #fffbeb; border-left: 4px solid #d97706; padding: 12px; margin-bottom: 24px; border-radius: 4px;">
+                    <strong style="color: #92400e; font-size: 13px; display: block; margin-bottom: 2px;">Specifications Summary:</strong>
+                    <span style="font-size: 13px; color: #78350f; line-height: 1.4;">{order_data.get('job_description')}</span>
+                </div>
+                
+                <p style="font-size: 13px; color: #64748b; text-align: center; margin-bottom: 0;">Please access the System Modules side navigation and open the <b>Authorization Center</b> to pass administrative confirmation commands.</p>
+            </div>
+            <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0;">
+                Automated Infrastructure Layer • Appointed Time Printing Enterprise Hub
+            </div>
+        </div>
+        """
+        
+        email_data = {
+            "from": f"Appointed Time Hub <{sender_email}>",
+            "to": recipients,
+            "subject": f"🚨 Executive Action Required: Order {order_data.get('job_order_no', 'PENDING')} Submitted",
+            "html": email_html
+        }
+        
+        try:
+            requests.post(url, headers=headers, json=email_data, timeout=10)
+        except Exception:
+            pass # Suppress pipeline network blocks to keep standard frontend execution solid
+
+    threading.Thread(target=worker, args=(payload,), daemon=True).start()
 
 # --- 3. PREMIUM "CLEAN INDUSTRIAL LIGHT" CSS TYPOGRAPHY & STYLING ---
 st.markdown("""
@@ -188,7 +271,6 @@ html, body, [class*="css"] {
     border-bottom: 1px solid #f1f5f9;
     padding-bottom: 0.5rem;
 }
-
 /* --- SECURELY ELIMINATE STREAMLIT FORM CAPTION INSTRUCTIONS & ENTER KEY LABELS --- */
 [data-testid="stFormSubmitInstructions"],
 [data-testid="stWidgetFormInstruction"],
@@ -212,7 +294,6 @@ def init_supabase():
         return create_client(url, key)
     except Exception:
         return None
-
 supabase: Client = init_supabase()
 
 def sanitize_string(input_str):
@@ -370,12 +451,10 @@ def generate_pdf_manifest(ticket):
     bold_style = ParagraphStyle('BoldStyle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=9)
     normal_style = ParagraphStyle('NormStyle', parent=styles['Normal'], fontName='Helvetica', fontSize=9)
     small_grey = ParagraphStyle('SmallGrey', parent=styles['Normal'], fontName='Helvetica', fontSize=7, textColor=colors.HexColor("#64748b"))
-
     def cb(val, match_str):
         if isinstance(val, str) and match_str.upper() in val.upper():
             return "[X]"
         return "[  ]"
-
     # Header Block
     header_data = [
         [
@@ -391,12 +470,10 @@ def generate_pdf_manifest(ticket):
     ]))
     elements.append(t_header)
     elements.append(Spacer(1, 12))
-
     # Customer & Financial Grid
     total = float(ticket.get('total_amount', 0))
     deposit = float(ticket.get('deposit_amount', 0))
     balance = total - deposit
-
     cust_data = [
         [Paragraph("Customer Name", small_grey), Paragraph("Telephone Number", small_grey), Paragraph("Job Order Date", small_grey), Paragraph("Date of Collection", small_grey)],
         [Paragraph(str(ticket.get('customer_name', '')), bold_style), Paragraph(str(ticket.get('telephone_number', '')), bold_style), Paragraph(str(ticket.get('order_date', '')), bold_style), Paragraph(str(ticket.get('date_of_collection', '')), bold_style)],
@@ -414,7 +491,6 @@ def generate_pdf_manifest(ticket):
     ]))
     elements.append(t_cust)
     elements.append(Spacer(1, 12))
-
     # Categorical Checkboxes
     type_print = ticket.get('type_of_print', '')
     mat_source = ticket.get('material_source', '')
@@ -431,7 +507,6 @@ def generate_pdf_manifest(ticket):
     ]))
     elements.append(t_cat)
     elements.append(Spacer(1, 12))
-
     # Job Description Array
     elements.append(Paragraph("JOB DESCRIPTION", small_grey))
     desc_data = [[Paragraph(str(ticket.get('job_description', '')), normal_style)]]
@@ -443,12 +518,10 @@ def generate_pdf_manifest(ticket):
     ]))
     elements.append(t_desc)
     elements.append(Spacer(1, 6))
-
     size_data = [[Paragraph("PRINT SIZE: " + str(ticket.get('print_size', '')), normal_style), Paragraph("FINISHED PRINT SIZE: " + str(ticket.get('finished_print_size', '')), normal_style)]]
     t_size = Table(size_data, colWidths=[3.5*inch, 3.5*inch])
     elements.append(t_size)
     elements.append(Spacer(1, 12))
-
     # Material Table Grid
     mat_grid = [
         [Paragraph("Material Description (Paper)", small_grey), Paragraph("GSM", small_grey), Paragraph("Size", small_grey), Paragraph("Paper Colour", small_grey)],
@@ -463,7 +536,6 @@ def generate_pdf_manifest(ticket):
     ]))
     elements.append(t_mat)
     elements.append(Spacer(1, 12))
-
     # Finishing Sub-Tables
     bind_type = str(ticket.get('binding_type', ''))
     lam_type = str(ticket.get('laminating_type', ''))
@@ -483,7 +555,6 @@ def generate_pdf_manifest(ticket):
     ]))
     elements.append(t_fin)
     elements.append(Spacer(1, 30))
-
     # Authorization Footer Block
     footer_data = [
         [Paragraph("Prepared by: .......................................", normal_style), Paragraph("Sign: .......................", normal_style), Paragraph(f"Date: {ticket.get('order_date', '')}", normal_style)],
@@ -496,7 +567,6 @@ def generate_pdf_manifest(ticket):
         ('BOTTOMPADDING', (0,0), (-1,-1), 10)
     ]))
     elements.append(t_foot)
-
     doc.build(elements)
     buffer.seek(0)
     return buffer
@@ -506,7 +576,6 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "Command Center"
-
 MODULE_ICONS = {
     "Command Center": "   ⊙   ",
     "Shop Floor Control": "   ☵   ",
@@ -515,7 +584,6 @@ MODULE_ICONS = {
     "Authorization Center": "   ✓   ",
     "Approved Orders Archive": "   📁   "
 }
-
 if not st.session_state.authenticated:
     st.markdown("<div style='margin-top: 5rem;'></div>", unsafe_allow_html=True)
     st.markdown("<h2 style='text-align: center; color: #0f172a; margin-bottom: 2rem;'>System Authentication</h2>", unsafe_allow_html=True)
@@ -585,7 +653,6 @@ with st.sidebar:
 
 st.markdown('<div class="main-title">Appointed Time Printing Ltd.</div>', unsafe_allow_html=True)
 st.markdown('<div class="main-subtitle">Secured Capacity Planning Engine</div>', unsafe_allow_html=True)
-
 app_mode = st.session_state.app_mode
 
 # --- ROUTE 1: COMMAND CENTER ---
@@ -722,11 +789,15 @@ elif app_mode == "Raise Job Order":
                     
                     # Resolved Toast single character constraint requirement mapping
                     st.toast("Job Entry securely deposited inside management ledger pool successfully.", icon="✅")
+                    
+                    # Dispatch background operational notification alerts using Resend REST Engine
+                    send_resend_notification(order_payload)
+                    
                 except Exception as e:
                     st.error(f"Failed to process order sequence entry: {str(e)}")
             else:
                 st.error(f"Transaction Blocked. Missing required fields: {', '.join(missing_fields)}")
-
+                
     if st.session_state.last_raised_order is not None:
         ticket = st.session_state.last_raised_order
         
@@ -910,7 +981,6 @@ elif app_mode == "Approved Orders Archive" and is_admin:
                     type="primary"
                 )
                 st.markdown("<br>", unsafe_allow_html=True)
-
                 with st.form(key=f"edit_form_{target_row['id']}"):
                     e_qty = st.number_input("Print Quantity", value=int(target_row['qty_to_print']), step=100)
                     e_amt = st.number_input("Total Amount", value=float(target_row['total_amount']), step=50.0)
