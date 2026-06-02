@@ -4,3 +4,4 @@ plotly>=5.17.0
 supabase>=2.0.0
 python-dotenv>=1.0.0
 fpdf2
+reportlab
