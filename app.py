@@ -225,10 +225,96 @@ html, body, [class*="css"] {
     text-align: center;
 }
 
-/* --- SECURELY ELIMINATE ALL STREAMLIT FORM SUBMIT & WIDGET INSTRUCTIONS --- */
+/* --- SECURELY ELIMINATE STREAMLIT FORM CAPTION INSTRUCTIONS --- */
 [data-testid="stFormSubmitInstructions"], 
 [data-testid="stWidgetFormInstruction"] {
     display: none !important;
+}
+
+/* ==========================================================================
+   INDUSTRIAL CORPORATE WORK TICKET PLATFORM DEFINITION (ZONE A, B, C, D)
+   ========================================================================== */
+.work-ticket-canvas {
+    background-color: #ffffff;
+    color: #000000;
+    padding: 20px;
+    border: 2px solid #1e293b;
+    border-radius: 4px;
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.ticket-table-matrix {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 12px;
+}
+.ticket-table-matrix th, .ticket-table-matrix td {
+    border: 1px solid #1e293b;
+    padding: 8px 10px;
+    text-align: left;
+    font-size: 0.85rem;
+    vertical-align: top;
+}
+.ticket-table-matrix th {
+    background-color: #f1f5f9;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    color: #0f172a;
+}
+.ticket-badge-box {
+    border: 1px solid #1e293b;
+    padding: 4px 8px;
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-right: 6px;
+    background-color: #f8fafc;
+}
+.ticket-badge-box.active {
+    background-color: #0f172a;
+    color: #ffffff;
+}
+.checkbox-item {
+    font-family: monospace;
+    font-size: 1rem;
+    margin-right: 4px;
+}
+.desc-board-container {
+    background-color: #fafafa;
+    border: 1px solid #1e293b;
+    padding: 12px;
+    font-size: 0.9rem;
+    min-height: 80px;
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+}
+
+/* --- DEDICATED BROWSER PRINT DRIVER ARCHITECTURE --- */
+@media print {
+    body * {
+        visibility: hidden;
+    }
+    .work-ticket-canvas, .work-ticket-canvas * {
+        visibility: visible;
+    }
+    .work-ticket-canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100% !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
+    header {
+        display: none !important;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -461,7 +547,7 @@ else:
                 st.rerun()
                 
         st.markdown("<br><br>", unsafe_allow_html=True)
-        if st.button("Logout", use_container_width=True, type="primary"):
+        if st.button("Secure Logout System", use_container_width=True, type="primary"):
             st.session_state.authenticated = False
             st.rerun()
 
@@ -509,6 +595,11 @@ if st.session_state.authenticated:
     # --- ROUTE 2: RAISE JOB ORDER ---
     elif app_mode == "Raise Job Order":
         st.markdown('<div class="section-header">Press Job Order Entry Form</div>', unsafe_allow_html=True)
+        
+        # Initialize a container in session state to handle the structural work ticket display state
+        if "last_raised_order" not in st.session_state:
+            st.session_state.last_raised_order = None
+
         with st.form("raise_order_form"):
             c1, c2 = st.columns(2)
             c_name = c1.text_input("Customer Name *")
@@ -522,8 +613,8 @@ if st.session_state.authenticated:
             q_print = f4.number_input("Total Quantity to Print *", min_value=0, step=500)
             
             s1, s2, s3, s4 = st.columns(4)
-            t_print = s1.selectbox("Category of Print Selection *", ["", "OFFSET", "DIGITAL PRESS", "PACKAGING"])
-            m_source = s2.selectbox("Material Procurement Source", ["Client Sourced Stock", "Company Sourced Inventory"])
+            t_print = s1.selectbox("Category of Print Selection *", ["", "OFFSET", "DIGITAL PRESS", "PACKAGING", "DTF", "Flexi", "Screen Print", "UV-DTF", "SAV", "Embroidery"])
+            m_source = s2.selectbox("Material Procurement Source", ["", "Client Sourced Stock", "Company Sourced Inventory", "Client Sourced Stock (Customer Material)", "Company Sourced Inventory (Company Material)"])
             p_size = s3.text_input("Raw Print Size Layout")
             f_size = s4.text_input("Finished Trimmed Size")
             
@@ -546,7 +637,6 @@ if st.session_state.authenticated:
             submit_order = st.form_submit_button("SUBMIT FOR MANAGEMENT APPROVAL", use_container_width=True)
             
             if submit_order:
-                # Compile missing fields selectively
                 missing_fields = []
                 if not c_name.strip(): missing_fields.append("Customer Name")
                 if not c_phone.strip(): missing_fields.append("Telephone Number")
@@ -584,13 +674,238 @@ if st.session_state.authenticated:
                         "created_by": st.session_state.user_email
                     }
                     try:
-                        supabase.table('job_orders').insert(order_payload).execute()
+                        # Database insertion mechanism intact
+                        res = supabase.table('job_orders').insert(order_payload).execute()
+                        
+                        # Extract the generated order code sequence safely if available
+                        generated_no = "PENDING"
+                        if res.data and len(res.data) > 0:
+                            generated_no = res.data[0].get("job_order_no", f"AT-{random.randint(10000,99999)}")
+                        else:
+                            generated_no = f"AT-{random.randint(10000,99999)}"
+                            
+                        order_payload["job_order_no"] = generated_no
+                        order_payload["order_date"] = datetime.now().strftime('%Y-%m-%d')
+                        st.session_state.last_raised_order = order_payload
+                        
+                        # Premium native toast notification engine implementation
                         st.toast("Job Entry securely deposited inside management ledger pool successfully.", icon="✅")
                     except Exception as e:
                         st.error(f"Failed to process order sequence entry: {str(e)}")
                 else:
                     st.error(f"Submission blocked. Please review or fill in the following mandatory fields: {', '.join(missing_fields)}.")
                     
+        # ==========================================================================
+        # REDESIGNED INDUSTRIAL PRESENTATION LAYER: PHYSICAL CORPORATE WORK TICKET
+        # ==========================================================================
+        if st.session_state.last_raised_order is not None:
+            ticket = st.session_state.last_raised_order
+            
+            # Formulate math metrics without structural variable modifications
+            total_amt_val = ticket["total_amount"]
+            deposit_amt_val = ticket["deposit_amount"]
+            outstanding_bal_val = total_amt_val - deposit_amt_val
+            
+            # String parsing logic for inline checkboxes (Zone C & D)
+            top_val = ticket["type_of_print"].upper()
+            src_val = ticket["material_source"].upper()
+            psize_val = ticket["print_size"].upper()
+            fsize_val = ticket["finished_print_size"].upper()
+            bind_val = ticket["binding_type"].upper()
+            lam_val = ticket["laminating_type"].upper()
+            
+            # Active engine checking for Zone A department tracking indicators
+            is_large_format = "☑" if any(x in top_val for x in ["OFFSET", "PACKAGING", "SAV", "FLEXI", "DIGITAL PRESS"]) else "☐"
+            is_embroidery = "☑" if "EMBROIDERY" in top_val else "☐"
+            is_screen = "☑" if "SCREEN PRINT" in top_val else "☐"
+            
+            # Build HTML Document Node Frame
+            ticket_html = f"""
+            <div class="work-ticket-canvas">
+                <table class="ticket-table-matrix" style="border: none; margin-bottom: 20px;">
+                    <tr style="border: none;">
+                        <td style="width: 50%; border: none; padding: 0;">
+                            <h2 style="margin: 0 0 4px 0; font-weight: 800; font-size: 1.4rem; letter-spacing: -0.02em;">APPOINTED TIME PRINTING</h2>
+                            <p style="margin: 0; font-size: 0.8rem; color: #475569; line-height: 1.4;">
+                                PO BOX AC 56 Art Centre Accra<br>
+                                Tel: 0302 689704/6
+                            </p>
+                        </td>
+                        <td style="width: 50%; border: none; padding: 0; text-align: right; vertical-align: middle;">
+                            <h1 style="margin: 0; font-weight: 900; font-size: 2rem; color: #0f172a; letter-spacing: -0.03em;">JOB ORDER</h1>
+                            <p style="margin: 4px 0 0 0; font-size: 1.1rem; font-weight: 700; font-family: monospace;">
+                                WAYBILL NO: {ticket.get("job_order_no", "PENDING")}
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+                
+                <div style="margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #1e293b;">
+                    <span class="ticket-badge-box">ENGINE MONITORING:</span>
+                    <span class="ticket-badge-box"> {is_large_format} DEPT Large Format</span>
+                    <span class="ticket-badge-box"> {is_embroidery} Embroidery</span>
+                    <span class="ticket-badge-box"> {is_screen} Screen Print</span>
+                </div>
+
+                <table class="ticket-table-matrix">
+                    <tr>
+                        <th style="width: 50%;">Customer Name</th>
+                        <th style="width: 50%;">Telephone Number</th>
+                    </tr>
+                    <tr>
+                        <td><strong>{ticket["customer_name"]}</strong></td>
+                        <td>{ticket["telephone_number"]}</td>
+                    </tr>
+                    <tr>
+                        <th>Order Date</th>
+                        <th>Target Date of Collection</th>
+                    </tr>
+                    <tr>
+                        <td>{ticket["order_date"]}</td>
+                        <td><strong>{ticket["date_of_collection"]}</strong></td>
+                    </tr>
+                    <tr>
+                        <th colspan="2">Financial Ledger Matrix</th>
+                    </tr>
+                    <tr>
+                        <td colspan="2" style="padding: 0;">
+                            <table style="width: 100%; border-collapse: collapse; border: none;">
+                                <tr style="border: none;">
+                                    <td style="border: none; border-right: 1px solid #1e293b; width: 33.33%;">Total Contract: <strong>{CURRENCY}{total_amt_val:,.2f}</strong></td>
+                                    <td style="border: none; border-right: 1px solid #1e293b; width: 33.33%;">Deposit Paid: <span style="color:#059669; font-weight:600;">{CURRENCY}{deposit_amt_val:,.2f}</span></td>
+                                    <td style="border: none; width: 33.33%; background-color: #f8fafc;">Outstanding: <strong style="color:#b91c1c;">{CURRENCY}{outstanding_bal_val:,.2f}</strong></td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Total Quantity to Print</th>
+                        <th>Balance Settlement Deadline</th>
+                    </tr>
+                    <tr>
+                        <td><strong style="font-size: 1rem;">{ticket["qty_to_print"]:,} units</strong></td>
+                        <td>{ticket["balance_due_date"]}</td>
+                    </tr>
+                </table>
+
+                <table class="ticket-table-matrix">
+                    <tr>
+                        <th>TYPE OF PRINT COMPONENT TRACKING SELECTION</th>
+                    </tr>
+                    <tr>
+                        <td>
+                            <span class="checkbox-item">{"☑" if "DTF" in top_val else "☐"} DTF</span> &nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "FLEXI" in top_val else "☐"} Flexi</span> &nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "SCREEN PRINT" in top_val else "☐"} Screen Print</span> &nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "UV-DTF" in top_val else "☐"} UV-DTF</span> &nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "SAV" in top_val else "☐"} SAV</span> &nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "EMBROIDERY" in top_val else "☐"} Embroidery</span> &nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "OFFSET" in top_val else "☐"} Offset Press</span> &nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "DIGITAL PRESS" in top_val else "☐"} Digital Press</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>MATERIAL PROCUREMENT SOURCE INDICATOR</th>
+                    </tr>
+                    <tr>
+                        <td>
+                            <span class="checkbox-item">{"☑" if "COMPANY" in src_val or "INVENTORY" in src_val else "☐"} COMPANY MATERIAL</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "CLIENT" in src_val or "CUSTOMER" in src_val else "☐"} CUSTOMER MATERIAL</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>BOUNDING SHEET DIMENSIONS & SIZING MATRIX</th>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div style="margin-bottom: 6px;">
+                                <span style="font-weight: 600; font-size: 0.75rem; color: #475569;">RAW SIZE:</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A1" in psize_val else "☐"} A1</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A2" in psize_val else "☐"} A2</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A3" in psize_val else "☐"} A3</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A4" in psize_val else "☐"} A4</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A5" in psize_val else "☐"} A5</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if psize_val and not any(x in psize_val for x in ["A1","A2","A3","A4","A5"]) else "☐"} Custom Yardage: ({ticket["print_size"] if ticket["print_size"] else 'N/A'})</span>
+                            </div>
+                            <div>
+                                <span style="font-weight: 600; font-size: 0.75rem; color: #475569;">FINISHED TRIM:</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A1" in fsize_val else "☐"} A1</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A2" in fsize_val else "☐"} A2</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A3" in fsize_val else "☐"} A3</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A4" in fsize_val else "☐"} A4</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if "A5" in fsize_val else "☐"} A5</span> &nbsp;&nbsp;
+                                <span class="checkbox-item">{"☑" if fsize_val and not any(x in fsize_val for x in ["A1","A2","A3","A4","A5"]) else "☐"} Custom Trim: ({ticket["finished_print_size"] if ticket["finished_print_size"] else 'N/A'})</span>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #0f172a; margin-bottom: 4px;">MANUFACTURING JOB DESCRIPTION SPECIFICATIONS</div>
+                <div class="desc-board-container">{ticket["job_description"]}</div>
+
+                <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #0f172a; margin-bottom: 4px;">RAW SUBSTRATE MATERIAL DESCRIPTION SPECIFICATIONS</div>
+                <table class="ticket-table-matrix">
+                    <thead>
+                        <tr>
+                            <th style="width: 40%;">Substrate / Material</th>
+                            <th style="width: 30%;">Sizes Rating / GSM</th>
+                            <th style="width: 30%;">Color Specs Source Stock</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>{ticket["paper_type"] if ticket["paper_type"] else 'N/A'}</td>
+                            <td>{ticket["paper_size"] if ticket["paper_size"] else 'N/A'} &nbsp; {f"({ticket['gsm']} gsm)" if ticket['gsm'] else ''}</td>
+                            <td>{ticket["paper_colour"] if ticket["paper_colour"] else 'N/A'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table class="ticket-table-matrix">
+                    <tr>
+                        <th style="width: 50%;">PRODUCTION POST-PRESS FINISHING PROCESSING CONTROLS</th>
+                        <th style="width: 50%;">LOGISTICS & PACKAGING SPECIFICATIONS</th>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div style="margin-bottom: 4px;"><strong>Binding Options:</strong></div>
+                            <span class="checkbox-item">{"☑" if "PERFECT" in bind_val else "☐"} Perfect Bind</span> &nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "SPIRAL" in bind_val else "☐"} Spiral</span> &nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "SADDLE" in bind_val else "☐"} Saddle Stitch</span><br>
+                            
+                            <div style="margin-top: 8px; margin-bottom: 4px;"><strong>Lamination Options:</strong></div>
+                            <span class="checkbox-item">{"☑" if "GLOSS" in lam_val else "☐"} Gloss</span> &nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "MATT" in lam_val else "☐"} Matt Laminating</span> &nbsp;&nbsp;
+                            <span class="checkbox-item">{"☑" if "UV" in lam_val else "☐"} UV-Varnish</span>
+                            <div style="margin-top: 6px; font-size: 0.8rem; color:#475569;">Color Mix Run: {ticket["impressions_colour"] if ticket["impressions_colour"] else 'Default Mix'}</div>
+                        </td>
+                        <td>
+                            <div style="margin-bottom: 4px;"><strong>Packaging Guidelines:</strong></div>
+                            <span class="checkbox-item">{"☑" if "BOX" in ticket["job_description"].upper() or "OFFSET" in top_val else "☐"} BOX PACKAGING</span><br>
+                            <span class="checkbox-item">{"☑" if "BAG" in ticket["job_description"].upper() or "EMBROIDERY" in top_val else "☐"} BAG PACKAGING</span>
+                            
+                            <div style="margin-top: 12px; margin-bottom: 4px;"><strong>Logistics Target Mode:</strong></div>
+                            <div style="font-size: 0.85rem; padding: 4px; border: 1px dashed #1e293b; background: #fff; display: inline-block;">
+                                🚚 {ticket["delivery_mode"]}
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+                
+                <div style="margin-top: 25px; display: flex; justify-content: space-between; font-size: 0.8rem; color: #475569;">
+                    <div>Authorized Handler Signature: _______________________</div>
+                    <div>Floor Manager Verification: _______________________</div>
+                </div>
+            </div>
+            """
+            
+            # Inject structural markup block safely into Streamlit layout views
+            st.markdown(ticket_html, unsafe_allow_html=True)
+            
+            # Native trigger interaction implementation layer
+            if st.button("Print Work Ticket", type="primary", use_container_width=True):
+                st.components.v1.html("<script>window.print();</script>", height=0, width=0)
+
     # --- ROUTE 3: AUTHORIZATION CENTER ---
     elif app_mode == "Authorization Center" and is_admin:
         st.markdown('<div class="section-header">Executive Authorization Control Panel</div>', unsafe_allow_html=True)
@@ -671,7 +986,7 @@ if st.session_state.authenticated:
                     "Order No": st.column_config.TextColumn("Order No", help="Unique sequential system layout job number", width="medium"),
                     "Customer Name": st.column_config.TextColumn("Customer Name", width="large"),
                     "Print Qty": st.column_config.NumberColumn("Print Qty", format="%d", width="small"),
-                    "Category": st.column_config.SelectboxColumn("Category", options=["OFFSET", "DIGITAL PRESS", "PACKAGING"], width="medium"),
+                    "Category": st.column_config.SelectboxColumn("Category", options=["OFFSET", "DIGITAL PRESS", "PACKAGING", "DTF", "Flexi", "Screen Print", "UV-DTF", "SAV", "Embroidery"], width="medium"),
                     "total_amount": st.column_config.NumberColumn(f"Total Amount ({CURRENCY})", format=f"{CURRENCY} %,.2f", width="medium"),
                     "deposit_amount": st.column_config.NumberColumn(f"Deposit Paid ({CURRENCY})", format=f"{CURRENCY} %,.2f", width="medium"),
                     "Authorized Manager": st.column_config.TextColumn("Authorized Manager", width="medium")
@@ -731,7 +1046,7 @@ if st.session_state.authenticated:
                     total_val = c3.number_input("Assigned Contract Evaluation Value (GH₵)", value=float(matched_order['total_amount']), min_value=0.0)
                     
                     st.markdown("#### Sequential Floor Run Mappings")
-                    if prod_cat == "Book / Brochure":
+                    if prod_cat == "Book / Magazine Brochure":
                         type_id = 1
                         text_pages = st.number_input("Total Inner Text Pages", value=16, min_value=4, step=4)
                         text_ups = st.number_input("Text Page Layout Signatures (Ups)", value=8, min_value=1)
