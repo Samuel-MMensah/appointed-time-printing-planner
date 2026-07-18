@@ -1,0 +1,63 @@
+# render.yaml -- Infrastructure-as-code for Appointed Time Enterprise Hub.
+#
+# IMPORTANT -- read this before touching the envVars below:
+# st.secrets only reads from a .streamlit/secrets.toml FILE. It does NOT
+# automatically read OS environment variables -- only messaging.py's
+# _config() helper has that os.environ fallback; every direct
+# st.secrets.get(...) call elsewhere in app.py does not.
+#
+# So you have two real options:
+#   A) RECOMMENDED, zero code changes: skip the envVars below entirely.
+#      Instead use Render's "Secret Files" feature (dashboard -> this
+#      service -> Environment -> Secret Files) to upload the
+#      secrets.toml template provided alongside this file, mounted at
+#      path ".streamlit/secrets.toml". st.secrets picks it up exactly
+#      like it did on Community Cloud -- nothing else to configure.
+#   B) More code work: keep the envVars below AND go through app.py
+#      replacing direct st.secrets.get(...) calls with messaging.py's
+#      _config()-style pattern (st.secrets first, os.environ second),
+#      so the same code works with either mechanism. Only worth doing
+#      if you want secrets manageable from Render's dashboard UI
+#      instead of re-uploading a file whenever a value changes.
+#
+# Commit this file at the root of your GitHub repo, then in Render:
+# New -> Blueprint -> select this repo.
+
+services:
+  - type: web
+    name: appointed-time-hub
+    runtime: python
+    plan: starter          # ~$7/mo, always-on, no cold starts. Use "free" to test first (spins down after 15 min idle).
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "streamlit run app.py --server.port $PORT --server.address 0.0.0.0"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Everything below is OPTION B only (see note above) -- leave unset
+      # if you're using Secret Files (Option A) instead.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_SENDER_EMAIL
+        sync: false
+      - key: APPROVAL_NOTIFY_EMAILS
+        sync: false
+      - key: WAREHOUSE_NOTIFY_EMAILS
+        sync: false
+      - key: FINANCE_NOTIFY_EMAILS
+        sync: false
+      - key: NOTIFY_EMAIL_1
+        sync: false
+      - key: NOTIFY_EMAIL_2
+        sync: false
+      - key: APP_URL
+        sync: false
+      # Add one of these per department that needs its own alert list,
+      # e.g. DEPT_EMAILS_PRESS, DEPT_EMAILS_GARMENT -- see messaging.py.
+      - key: DEPT_EMAILS_PRESS
+        sync: false
+      - key: DEPT_EMAILS_GARMENT
+        sync: false
