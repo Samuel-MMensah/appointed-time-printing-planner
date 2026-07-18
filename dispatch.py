@@ -55,7 +55,7 @@ def render_dispatch_module(
         cache invalidation itself.
     currency: pass app.py's CURRENCY constant.
     """
-    if not rbac.check_access(rbac.ADMIN_ROLES):
+    if not rbac.check_access(rbac.ADMIN_ROLES | rbac.FINANCE_ROLES):
         st.markdown(
             '<div style="margin-top:3rem;text-align:center;">'
             '<div style="font-size:1.5rem;font-weight:800;color:var(--at-navy,#0f172a);'
@@ -69,7 +69,7 @@ def render_dispatch_module(
 
     st.markdown('<div class="section-header">Dispatch</div>', unsafe_allow_html=True)
 
-    orders = get_db_job_orders_multi_status(["In Production", "Ready for Collection"])
+    orders = get_db_job_orders_multi_status(["In Production", "At Warehouse"])
     if orders.empty:
         st.info("No orders currently in production or awaiting collection.")
         return
@@ -84,6 +84,7 @@ def render_dispatch_module(
         total_amt  = float(row.get("total_amount", 0) or 0)
         deposit    = float(row.get("deposit_amount", 0) or 0)
         balance    = max(0.0, total_amt - deposit)
+        _not_ready = status.strip() != "At Warehouse"
 
         with st.container():
             st.markdown(
@@ -137,9 +138,19 @@ def render_dispatch_module(
                     unsafe_allow_html=True,
                 )
 
+            if _not_ready:
+                st.markdown(
+                    '<div style="background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #f59e0b;'
+                    'border-radius:8px;padding:0.65rem 1rem;margin:0.5rem 0 1rem 0;font-size:0.82rem;'
+                    'color:#92400e;font-weight:600;">'
+                    'Still in production — Finalize Dispatch unlocks once the production team '
+                    'marks this order sent to the warehouse.</div>',
+                    unsafe_allow_html=True,
+                )
+
             if st.button(
                 "Finalize Dispatch", key=f"finalize_{row_id}",
-                disabled=(balance > 0), use_container_width=True,
+                disabled=(balance > 0 or _not_ready), use_container_width=True,
                 type="primary",
             ):
                 if update_order_lifecycle_status(row_id, "Delivered"):

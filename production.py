@@ -14,11 +14,12 @@ def _dept_of(row: dict) -> str:
     return "GARMENT" if pt in ("DTF", "UV-DTF", "SAV", "EMBROIDERY", "FLEXI SCREEN PRINT") else "PRESS"
 
 def render_production_board(
-    get_db_job_orders, 
+    get_db_job_orders_multi_status,
     update_order_lifecycle_status, 
     generate_pdf_export=None,
     currency: str = "GH₵",
     send_departmental_alert=None,
+    notify_sent_to_warehouse=None,
     user_department: str = "NONE"
 ) -> None:
     
@@ -30,9 +31,9 @@ def render_production_board(
 
     st.markdown('<div class="section-header">Production Board</div>', unsafe_allow_html=True)
 
-    orders = get_db_job_orders(status_filter="Approved")
+    orders = get_db_job_orders_multi_status(["Approved", "In Production"])
     if orders.empty:
-        st.info("No approved orders waiting to start production.")
+        st.info("No approved orders waiting to start production, and nothing currently in production.")
         return
 
     # Filtering
@@ -67,7 +68,7 @@ def render_production_board(
         <div style="background:var(--at-white,#ffffff);border:1px solid var(--at-border,#e2e8f0);
                     border-radius:12px;padding:1.5rem;margin-bottom:1rem;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
             <div style="font-size:0.7rem;font-weight:700;color:#64748b;text-transform:uppercase;">
-                {order_no} &middot; {dept_label}
+                {order_no} &middot; {dept_label} &middot; {row.get('status','—')}
             </div>
             <div style="font-size:1.3rem;font-weight:800;color:#0f172a;margin-bottom:0.25rem;">
                 {customer}
@@ -89,10 +90,23 @@ def render_production_board(
         # Action Row
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("Start Production", key=f"start_{row_id}", use_container_width=True):
-                if update_order_lifecycle_status(row_id, "In Production"):
-                    st.success("Moved to In Production.")
-                    st.rerun()
+            _row_status = str(row.get('status', '—'))
+            if _row_status == "Approved":
+                if st.button("Start Production", key=f"start_{row_id}", use_container_width=True):
+                    if update_order_lifecycle_status(row_id, "In Production"):
+                        st.success("Moved to In Production.")
+                        st.rerun()
+            elif _row_status == "In Production":
+                if st.button("Send to Warehouse", key=f"warehouse_{row_id}",
+                              use_container_width=True, type="primary"):
+                    if update_order_lifecycle_status(row_id, "At Warehouse"):
+                        if notify_sent_to_warehouse:
+                            try:
+                                notify_sent_to_warehouse(row.to_dict())
+                            except Exception:
+                                logger.exception("notify_sent_to_warehouse failed for order id=%s.", row_id)
+                        st.success("Sent to warehouse.")
+                        st.rerun()
         with col2:
             if generate_pdf_export and st.button("Export PDF", key=f"pdf_{row_id}", use_container_width=True):
                 generate_pdf_export(row_id, row.to_dict())

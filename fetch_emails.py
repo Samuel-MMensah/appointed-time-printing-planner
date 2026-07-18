@@ -1,9 +1,7 @@
 import resend
 from supabase import create_client
 
-# Initialize Clients
-resend.api_key = "re_Xuy4mF6A_37Vv9NLfB1mHrWTqKjF1U9zk"
-supabase = create_client("https://taspskjeiesusxaobyqm.supabase.co", "sb_secret_shRSKayHg4YFcFysldYT0A_a08lkZXy")
+
 
 def send_and_log_email(print_job_id, recipient, subject, content):
     # Step 1 & 2: Send email and get the ID

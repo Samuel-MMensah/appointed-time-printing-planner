@@ -31,6 +31,14 @@ computing fresh from user_profile if user_role hasn't been synced yet.
 # in app.py once it imports from here, so there's only one list to update.
 ADMIN_ROLES = {"admin", "manager", "supervisor", "md", "fm"}
 
+# Real, standalone roles — introduced alongside the Warehouse module.
+# 'Finance_Dispatch' referenced elsewhere in the nav gate was never a real
+# role (ADMIN_ROLES never contained it, and no profile.role was ever set
+# to that exact string) — Dispatch was always just admin-gated in practice.
+# These two are the actual roles going forward.
+WAREHOUSE_ROLES = {"warehouse"}
+FINANCE_ROLES   = {"finance"}
+
 # profiles.department does not exist in any query app.py currently makes —
 # the only 'department' in the whole codebase lives on job_orders
 # (PRESS / GARMENT), which is a property of an ORDER, not a USER. If your

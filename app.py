@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 import random
 import re
+import math
 from supabase import create_client, Client
 import plotly.express as px
 import io
@@ -19,6 +20,7 @@ import logging
 import rbac
 from production import render_production_board
 from dispatch import render_dispatch_module
+from warehouse import render_warehouse_module
 from messaging import send_departmental_alert
 
 # ═══════════════════════════════════════════════════════════════════
@@ -116,6 +118,29 @@ MACHINE_DATA = {
     'CANON DIGITAL C10000':         {'rate': 6000,  'setup_hours': 0.5},
     'CANON DIGITAL C800':           {'rate': 4000,  'setup_hours': 0.5},
 }
+
+STAGE_DAYS_WARNING_THRESHOLD = 30  # working days (~6 calendar weeks) — see _estimate_working_days
+
+# ── Overlap-scheduling rule ──────────────────────────────────────────
+# A downstream stage doesn't need the upstream stage to be 100% finished —
+# it needs enough of a head start that stock is actually ready. Both are
+# measured from the upstream stage's START time, not its finish, so a
+# large press run no longer holds up Die Cutter (and everything after it)
+# for its own full multi-day duration. Same rule for every printing
+# machine (any press → Die Cutter, Die Cutter → Folder Gluer): the
+# downstream stage can begin the next calendar working day after the
+# upstream stage started — see _next_working_day_start().
+
+def _estimate_working_days(impressions, machine_name):
+    """Rough pre-flight estimate only — NOT the real scheduler (that's
+    calculate_production_time, which walks the calendar day by day and
+    accounts for weekends/existing backlog). This exists purely to catch
+    a fat-fingered quantity (an extra zero or two) at data-entry time,
+    before it silently jams a machine's schedule for a year+."""
+    mach = MACHINE_DATA.get(machine_name, {'rate': 1000})
+    rate = mach.get('rate') or 1000
+    hours_needed = impressions / rate
+    return hours_needed / max(1, (SHIFT_END_HOUR - SHIFT_START_HOUR))
 
 # ═══════════════════════════════════════════════════════════════════
 # 4. ASYNCHRONOUS RESEND NOTIFICATION ENGINE
@@ -285,6 +310,94 @@ def notify_order_rejected(order_data: dict) -> None:
     )
 
 
+def notify_needs_scheduling(order_data: dict) -> None:
+    """Reuses the approval recipient list on purpose — scheduling is
+    staying admin-only, same people who already get the approval alert."""
+    d = order_data
+    api_key      = st.secrets.get("RESEND_API_KEY", "")
+    sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+    html = _email_shell(
+        accent_bg="#1e3a8a",
+        heading="📋 READY TO SCHEDULE",
+        subheading=f"Appointed Time Printing &mdash; {d.get('department','PRESS')} Dept",
+        intro="This order is approved and waiting in Production Layout Builder.",
+        rows=[
+            ("Order No",       str(d.get('job_order_no', '—')), "#0369a1"),
+            ("Customer",       str(d.get('customer_name', '—')), None),
+            ("Contract Value", f"{CURRENCY} {float(d.get('total_amount',0) or 0):,.2f}", None),
+        ],
+        footer="Schedule it in Production Layout Builder.",
+    )
+    _send_resend_email(
+        api_key, sender_email, _approval_recipients(),
+        subject=f"Ready to Schedule: Order {d.get('job_order_no','—')}",
+        html_body=html, log_context="needs-scheduling",
+    )
+
+
+def _warehouse_recipients():
+    raw = st.secrets.get("WAREHOUSE_NOTIFY_EMAILS", "")
+    return [e.strip() for e in raw.split(",") if e.strip()] or ["md@appointedtime.com.gh"]
+
+
+def notify_sent_to_warehouse(order_data: dict) -> None:
+    d = order_data
+    api_key      = st.secrets.get("RESEND_API_KEY", "")
+    sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+    html = _email_shell(
+        accent_bg="#4f46e5",
+        heading="📥 ORDER SENT TO WAREHOUSE",
+        subheading="Appointed Time Printing &mdash; Warehouse Receiving",
+        intro="Production has completed this order and marked it ready for pickup at the warehouse.",
+        rows=[
+            ("Order No", str(d.get('job_order_no', '—')), "#4338ca"),
+            ("Customer", str(d.get('customer_name', '—')), None),
+        ],
+        footer="Confirm receipt in the Warehouse module.",
+    )
+    _send_resend_email(
+        api_key, sender_email, _warehouse_recipients(),
+        subject=f"Warehouse: Order {d.get('job_order_no','—')} arrived",
+        html_body=html, log_context="sent-to-warehouse",
+    )
+
+
+def _finance_recipients():
+    raw = st.secrets.get("FINANCE_NOTIFY_EMAILS", "")
+    return [e.strip() for e in raw.split(",") if e.strip()] or ["md@appointedtime.com.gh"]
+
+
+def notify_ready_for_finance(order_data: dict) -> bool:
+    """Warehouse's one action. Also flips warehouse_notified_finance so the
+    Warehouse module doesn't re-send this every time someone revisits."""
+    d = order_data
+    api_key      = st.secrets.get("RESEND_API_KEY", "")
+    sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+    html = _email_shell(
+        accent_bg="#065f46",
+        heading="📦 READY FOR DISPATCH",
+        subheading="Appointed Time Printing &mdash; Finance",
+        intro="Warehouse has prepared this order for delivery. Collect any outstanding balance and finalize dispatch.",
+        rows=[
+            ("Order No", str(d.get('job_order_no', '—')), "#065f46"),
+            ("Customer", str(d.get('customer_name', '—')), None),
+        ],
+        footer="Finalize in the Dispatch module.",
+    )
+    try:
+        _send_resend_email(
+            api_key, sender_email, _finance_recipients(),
+            subject=f"Ready for Dispatch: Order {d.get('job_order_no','—')}",
+            html_body=html, log_context="ready-for-finance",
+        )
+        if d.get('id'):
+            supabase.table('job_orders').update({"warehouse_notified_finance": True}).eq('id', d['id']).execute()
+        return True
+    except Exception:
+        logger.exception("notify_ready_for_finance failed for order id=%s.", d.get('id'))
+        return False
+
+
 def notify_collection_due(order_data: dict, days_remaining: int) -> None:
     """Alert management when an order collection date is approaching or overdue."""
     d, days = order_data, days_remaining
@@ -392,7 +505,6 @@ textarea:focus-visible, select:focus-visible {
 .fd-rejection-note-box { background: linear-gradient(135deg, #fef2f2 0%, #fce7e7 100%); border: 1px solid var(--at-danger-soft); border-radius: 8px; padding: 0.85rem 1.1rem; margin-top: 0.85rem; margin-bottom: 0.5rem; }
 .fd-pipeline-progress-track { background-color: var(--at-success-bg); height: 8px; border-radius: 9999px; overflow: hidden; border: 1px solid #a7f3d0; margin-top: 0.5rem; }
 .sidebar-active-nav { display:block; background-color:var(--at-navy) !important; color:var(--at-white) !important; font-weight:700; padding:0.75rem 1rem; border-radius:8px; margin-bottom:2px; font-size:0.875rem; letter-spacing:0.01em; cursor:default; line-height:1.4; }
-.nav-monogram { display:inline-flex; align-items:center; justify-content:center; min-width:1.6rem; height:1.6rem; padding:0 0.15rem; border-radius:6px; background:rgba(255,255,255,0.14); font-size:0.62rem; font-weight:800; letter-spacing:0.02em; margin-right:0.65rem; vertical-align:middle; }
 .sidebar-pending-badge { display:inline-flex; align-items:center; justify-content:center; background:var(--at-danger); color:var(--at-white); font-size:0.65rem; font-weight:800; min-width:1.25rem; height:1.25rem; padding:0 0.35rem; border-radius:9999px; margin-left:0.45rem; vertical-align:middle; line-height:1; }
 .ot-search-bar { background:var(--at-bg); border:1px solid var(--at-border); border-radius:10px; padding:0.85rem 1.1rem; margin-bottom:1rem; }
 </style>
@@ -497,6 +609,76 @@ def get_db_jobs():
         logger.exception("get_db_jobs: fetch from 'jobs' failed.")
         return pd.DataFrame()
 
+def get_shop_floor_timeline():
+    """jobs rows enriched with customer_name/status from their parent
+    job_orders row where job_order_no links them. Falls back to a
+    'legacy' label for rows scheduled before that column existed."""
+    floor_df = get_db_jobs()
+    if floor_df.empty:
+        return floor_df
+    floor_df['start_time']  = pd.to_datetime(floor_df['start_time'],  utc=True, format='mixed', errors='coerce')
+    floor_df['finish_time'] = pd.to_datetime(floor_df['finish_time'], utc=True, format='mixed', errors='coerce')
+
+    _order_nos = floor_df.get('job_order_no', pd.Series(dtype=str)).dropna().unique().tolist()
+    _ord_df = pd.DataFrame()
+    if _order_nos:
+        try:
+            _res = (supabase.table('job_orders')
+                    .select('job_order_no,customer_name,status')
+                    .in_('job_order_no', _order_nos).execute())
+            _ord_df = pd.DataFrame(_res.data)
+        except Exception:
+            logger.exception("get_shop_floor_timeline: job_orders join failed.")
+
+    if not _ord_df.empty:
+        floor_df = floor_df.merge(_ord_df, on='job_order_no', how='left')
+    else:
+        floor_df['customer_name'] = None
+        floor_df['status'] = None
+
+    floor_df['client_label'] = floor_df.apply(
+        lambda r: f"{r.get('job_order_no')} — {r['customer_name']}"
+                  if pd.notna(r.get('customer_name'))
+                  else f"{r.get('job_name','—')} (legacy)",
+        axis=1
+    )
+    floor_df['effective_finish'] = pd.to_datetime(
+        floor_df.get('revised_finish'), utc=True, errors='coerce'
+    ).fillna(floor_df['finish_time'])
+    return floor_df
+
+def get_job_pipeline_status(active_only=True):
+    """Reads job_pipeline_status (the DB view) and attaches customer_name.
+    The view itself stays a pure aggregate over jobs on purpose — it never
+    needs job_orders' schema to change to stay correct."""
+    if not supabase:
+        return pd.DataFrame()
+    try:
+        _pipe_df = pd.DataFrame(supabase.table('job_pipeline_status').select("*").execute().data)
+    except Exception:
+        logger.exception("get_job_pipeline_status failed.")
+        return pd.DataFrame()
+    if _pipe_df.empty:
+        return _pipe_df
+    if active_only:
+        _pipe_df = _pipe_df[_pipe_df['stages_complete'] < _pipe_df['stage_count']]
+    if _pipe_df.empty:
+        return _pipe_df
+    try:
+        _ord_df = pd.DataFrame(
+            supabase.table('job_orders').select('job_order_no,customer_name')
+            .in_('job_order_no', _pipe_df['job_order_no'].tolist()).execute().data
+        )
+    except Exception:
+        _ord_df = pd.DataFrame()
+    _pipe_df = _pipe_df.merge(_ord_df, on='job_order_no', how='left') if not _ord_df.empty else _pipe_df.assign(customer_name=None)
+    _pipe_df['scheduled_start']      = pd.to_datetime(_pipe_df['scheduled_start'], utc=True, errors='coerce')
+    _pipe_df['projected_completion'] = pd.to_datetime(_pipe_df['projected_completion'], utc=True, errors='coerce')
+    _pipe_df['label'] = _pipe_df.apply(
+        lambda r: f"{r['job_order_no']} — {r['customer_name']}" if pd.notna(r.get('customer_name'))
+                  else str(r['job_order_no']), axis=1)
+    return _pipe_df
+
 def get_db_job_orders(status_filter=None):
     if not supabase or not st.session_state.get("authenticated"):
         return pd.DataFrame()
@@ -598,7 +780,7 @@ ARCHIVE_ROW_CAP = 2000  # see get_archive_orders_cached docstring
 def get_archive_orders_cached() -> pd.DataFrame:
     """
     Fetch post-approval lifecycle orders for the Archive route.
-    Statuses: Approved | In Production | Ready for Collection | Delivered.
+    Statuses: Approved | In Production | At Warehouse | Ready for Collection | Delivered.
     Short TTL (30 s) because status changes here are frequent.
     Call get_archive_orders_cached.clear() after any lifecycle write.
 
@@ -613,7 +795,7 @@ def get_archive_orders_cached() -> pd.DataFrame:
         res = (
             supabase.table('job_orders')
             .select("*")
-            .in_('status', ['Approved', 'In Production', 'Ready for Collection', 'Delivered'])
+            .in_('status', ['Approved', 'In Production', 'At Warehouse', 'Ready for Collection', 'Delivered'])
             .order('created_at', desc=True)
             .limit(ARCHIVE_ROW_CAP)
             .execute()
@@ -659,18 +841,21 @@ def record_balance_payment(order_id: str, new_deposit: float) -> bool:
 def update_order_lifecycle_status(order_id: str, new_status: str) -> bool:
     """
     Advance an order through the production lifecycle.
-    Allowed transitions: Approved → In Production → Ready for Collection → Delivered.
-    Writes a dated timestamp field for the transition if the column exists.
+    Allowed transitions: Approved → In Production → At Warehouse → Delivered.
+    'Ready for Collection' remains a valid target for orders already in that
+    leg of the older flow. Writes a dated timestamp field for the
+    transition if the column exists.
     """
     if not supabase:
         return False
-    _allowed = {'In Production', 'Ready for Collection', 'Delivered'}
+    _allowed = {'In Production', 'At Warehouse', 'Ready for Collection', 'Delivered'}
     if new_status not in _allowed:
         return False
     try:
         _ts    = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
         _tscol = {
             'In Production':        'production_start_date',
+            'At Warehouse':         'warehouse_date',
             'Ready for Collection': 'ready_date',
             'Delivered':            'delivered_date',
         }.get(new_status)
@@ -804,6 +989,21 @@ def apply_calendar_bounds(dt):
         dt = (dt + timedelta(days=1)).replace(hour=SHIFT_START_HOUR, minute=0, second=0, microsecond=0)
     return dt
 
+def _next_working_day_start(upstream_start_dt):
+    """A downstream stage (Die Cutter after any press, Folder Gluer after
+    Die Cutter, etc.) can begin the calendar day AFTER the upstream stage
+    STARTED — not a fixed number of hours later, and not once the upstream
+    stage fully finishes. This is deliberately the same rule for every
+    printing machine, not a special case for one press: overnight drying
+    (or, for Die Cutter → Folder Gluer, enough cut stock to start folding)
+    is a next-day fact, not an hour-count. Still passed through
+    get_machine_next_available_time afterward, so real machine backlog on
+    the downstream machine still wins if it's busier than this."""
+    _next_day = (upstream_start_dt.replace(tzinfo=None) + timedelta(days=1)).replace(
+        hour=SHIFT_START_HOUR, minute=0, second=0, microsecond=0
+    )
+    return apply_calendar_bounds(_next_day)
+
 def get_machine_next_available_time(machine_name, requested_start_dt):
     df = get_db_jobs()
     naive_requested = requested_start_dt.replace(tzinfo=None)
@@ -865,13 +1065,17 @@ def add_multi_part_job(job_data):
     )
     val_per_stage = job_data['total_val'] / total_stages if total_stages > 0 else 0
     anchor_start  = datetime.combine(job_data['start_date'], datetime.now().time()).replace(tzinfo=timezone.utc)
+    printing_starts   = []
     printing_finishes = []
     records = []
+    _seq = 0
     for comp in job_data['components']:
         for machine in comp['machines']:
             allocated_start = get_machine_next_available_time(machine, anchor_start)
             finish          = calculate_production_time(allocated_start, comp['impressions'], machine)
+            printing_starts.append(allocated_start)
             printing_finishes.append(finish)
+            _seq += 1
             records.append({
                 "job_name":       job_data['name'],
                 "tracking_id":    tid,
@@ -882,10 +1086,24 @@ def add_multi_part_job(job_data):
                 "impressions":    int(comp['impressions']),
                 "start_time":     allocated_start.isoformat(),
                 "finish_time":    finish.isoformat(),
-                "contract_value": float(val_per_stage)
+                "contract_value": float(val_per_stage),
+                "job_order_no":   job_data.get('job_order_no'),
+                "sequence_no":    _seq,
+                "planned_start":  allocated_start.isoformat(),
+                "planned_finish": finish.isoformat(),
+                "stage_status":   "Scheduled",
             })
     earliest_base = (max(printing_finishes) if printing_finishes
                      else apply_calendar_bounds(anchor_start))
+    # Die Cutter can start the calendar day after printing began — not
+    # once printing is fully finished. If a job has multiple press
+    # components, all of them need their overnight window, so this uses
+    # the LATEST press start among components, not the earliest — the
+    # last press to begin is the real bottleneck.
+    press_ready_for_cut = (
+        _next_working_day_start(max(printing_starts))
+        if printing_starts else earliest_base
+    )
     ordered_finishing = sorted(
         job_data['finishing_machines'],
         key=lambda x: 0 if "DIE" in x.upper() else (1 if "FOLDER" in x.upper() else 2)
@@ -896,15 +1114,15 @@ def add_multi_part_job(job_data):
     for machine_name in ordered_finishing:
         if "DIE CUTTER" in machine_name.upper():
             calculation_qty       = job_data['total_qty'] / max(1, job_data['type_id'])
-            f_start               = get_machine_next_available_time(machine_name, anchor_start)
+            f_start               = get_machine_next_available_time(machine_name, press_ready_for_cut)
             f_finish              = calculate_production_time(f_start, calculation_qty, machine_name)
             die_cutter_start_time = f_start
             last_stage_finish     = f_finish
         elif "FOLDER GLUER" in machine_name.upper() and die_cutter_start_time is not None:
+            # Folding/gluing can start the calendar day after die-cutting
+            # began — it doesn't need the die-cutter's full run to finish.
             calculation_qty = job_data['total_qty']
-            stagger_offset  = calculate_production_time(
-                die_cutter_start_time, MACHINE_DATA['DIE CUTTER']['rate'] * 2, 'DIE CUTTER'
-            )
+            stagger_offset  = _next_working_day_start(die_cutter_start_time)
             f_start           = get_machine_next_available_time(machine_name, stagger_offset)
             f_finish          = calculate_production_time(f_start, calculation_qty, machine_name)
             last_stage_finish = f_finish
@@ -913,6 +1131,7 @@ def add_multi_part_job(job_data):
             f_start           = get_machine_next_available_time(machine_name, last_stage_finish)
             f_finish          = calculate_production_time(f_start, calculation_qty, machine_name)
             last_stage_finish = f_finish
+        _seq += 1
         records.append({
             "job_name":       job_data['name'],
             "tracking_id":    tid,
@@ -923,13 +1142,106 @@ def add_multi_part_job(job_data):
             "impressions":    int(calculation_qty),
             "start_time":     f_start.isoformat(),
             "finish_time":    f_finish.isoformat(),
-            "contract_value": float(val_per_stage)
+            "contract_value": float(val_per_stage),
+            "job_order_no":   job_data.get('job_order_no'),
+            "sequence_no":    _seq,
+            "planned_start":  f_start.isoformat(),
+            "planned_finish": f_finish.isoformat(),
+            "stage_status":   "Scheduled",
         })
     try:
         for r in records:
             supabase.table('jobs').insert(r).execute()
     except Exception as e:
         st.error(f"Database insertion failed: {str(e)}")
+
+def update_stage_status(tracking_id, new_status, revised_finish=None):
+    """The only place stage status gets written. If revised_finish is given
+    — a real completion, or a proactive re-estimate — the delta versus this
+    stage's own planned_finish cascades to every downstream, not-yet-complete
+    stage on the same order. Nothing else needs to be told; the view reads
+    revised_finish directly."""
+    _res = supabase.table('jobs').select('*').eq('tracking_id', tracking_id).execute()
+    if not _res.data:
+        return False
+    _row = _res.data[0]
+
+    _updates = {"stage_status": new_status}
+    if new_status == "Complete" and revised_finish is None:
+        revised_finish = datetime.now(timezone.utc)
+    if revised_finish is not None:
+        _updates["revised_finish"] = revised_finish.isoformat()
+        if new_status == "Complete":
+            _updates["actual_finish"] = revised_finish.isoformat()
+    supabase.table('jobs').update(_updates).eq('tracking_id', tracking_id).execute()
+
+    if revised_finish is None or _row.get('sequence_no') is None or not _row.get('job_order_no'):
+        return True
+    _baseline = _row.get('planned_finish')
+    if not _baseline:
+        return True
+    _delta = (revised_finish - datetime.fromisoformat(str(_baseline).replace('Z', '+00:00'))).total_seconds()
+    if abs(_delta) < 60:
+        return True
+
+    _sibs = (
+        supabase.table('jobs')
+        .select('tracking_id, planned_start, revised_start, revised_finish, planned_finish, stage_status')
+        .eq('job_order_no', _row['job_order_no'])
+        .gt('sequence_no', _row['sequence_no'])
+        .neq('stage_status', 'Complete')
+        .execute()
+    ).data or []
+
+    for _s in _sibs:
+        _sib_update = {}
+        _base_finish = _s.get('revised_finish') or _s.get('planned_finish')
+        if _base_finish:
+            _sib_update["revised_finish"] = (
+                datetime.fromisoformat(str(_base_finish).replace('Z', '+00:00')) + timedelta(seconds=_delta)
+            ).isoformat()
+        if _s.get('stage_status') == 'Scheduled':
+            _base_start = _s.get('revised_start') or _s.get('planned_start')
+            if _base_start:
+                _sib_update["revised_start"] = (
+                    datetime.fromisoformat(str(_base_start).replace('Z', '+00:00')) + timedelta(seconds=_delta)
+                ).isoformat()
+        if _delta > 0:
+            _sib_update["stage_status"] = "Delayed"
+        if _sib_update:
+            supabase.table('jobs').update(_sib_update).eq('tracking_id', _s['tracking_id']).execute()
+    return True
+
+def get_jobs_by_order_numbers(order_numbers: list[str]) -> pd.DataFrame:
+    """One query for the whole page, not one per card."""
+    if not supabase or not order_numbers:
+        return pd.DataFrame()
+    try:
+        res = supabase.table('jobs').select("*").in_('job_order_no', order_numbers).execute()
+        return pd.DataFrame(res.data)
+    except Exception:
+        logger.exception("get_jobs_by_order_numbers failed.")
+        return pd.DataFrame()
+
+def _pipeline_summary(order_no: str, jobs_df: pd.DataFrame):
+    if jobs_df.empty or 'job_order_no' not in jobs_df.columns:
+        return None
+    _rows = jobs_df[jobs_df['job_order_no'] == order_no].copy()
+    if _rows.empty:
+        return None
+    _rows['finish_time'] = pd.to_datetime(
+        _rows.get('revised_finish'), utc=True, errors='coerce'
+    ).fillna(pd.to_datetime(_rows['finish_time'], utc=True, errors='coerce'))
+    _now = pd.Timestamp.now(tz='UTC')
+    _pending = _rows[_rows['finish_time'] >= _now].sort_values('finish_time')
+    _current  = _pending.iloc[0] if not _pending.empty else None
+    _upcoming = _pending.iloc[1] if len(_pending) > 1 else None
+    return {
+        "current_machine": _current['machine']  if _current  is not None else None,
+        "next_machine":    _upcoming['machine'] if _upcoming is not None else None,
+        "eta":             _rows['finish_time'].max(),
+        "all_done":        _pending.empty,
+    }
 
 # ═══════════════════════════════════════════════════════════════════
 # 8a. PRESS PDF VECTOR EXPORT ENGINE
@@ -1564,18 +1876,6 @@ st.session_state.last_activity_ts = _now_ts   # refresh on every render
 # ═══════════════════════════════════════════════════════════════════
 # 10. SIDEBAR NAVIGATION
 # ═══════════════════════════════════════════════════════════════════
-MODULE_ICONS = {
-    "Command Center":            "CC",
-    "Shop Floor Control":        "SF",
-    "Production Layout Builder": "PL",
-    "Production Board":          "PB",
-    "Raise Job Order":           "RJ",
-    "My Order Tracker":          "OT",
-    "Authorization Center":      "AC",
-    "Approved Orders Archive":   "AA",
-    "Dispatch":                  "DI",
-}
-
 with st.sidebar:
     _sb_profile     = st.session_state.get('user_profile')
     _sb_name        = (
@@ -1611,8 +1911,9 @@ with st.sidebar:
         ops_modules.insert(1, "Production Layout Builder")
 
     admin_modules = ["Raise Job Order", "My Order Tracker"]
-    # Finance/Dispatch now get their own clear entry
-    if rbac.check_access(['Admin', 'Finance_Dispatch']):
+    if rbac.check_access(rbac.ADMIN_ROLES | rbac.WAREHOUSE_ROLES):
+        admin_modules.append("Warehouse")
+    if rbac.check_access(rbac.ADMIN_ROLES | rbac.FINANCE_ROLES):
         admin_modules.append("Dispatch")
     if rbac.check_access(['Admin']):
         admin_modules += ["Authorization Center", "Approved Orders Archive"]
@@ -1635,25 +1936,23 @@ with st.sidebar:
         Active route → styled <div> (no click target needed).
         Inactive     → st.button (navigates on click).
 
-        Icons are two-letter monograms, not emoji. Emoji glyphs render
-        differently per OS/font stack (Windows, macOS and Linux all draw
-        them differently), which fights the point of a shared design
-        system, and st.button's label can't host a styled HTML badge
-        regardless — plain text is the only option that's both
-        cross-platform-identical and works inside a native button.
+        Plain page name only — no icon/monogram prefix. An earlier version
+        prefixed a two-letter monogram (CC, WH, etc.), but st.button can't
+        host a styled HTML badge, so on inactive items that monogram
+        rendered as literal text glued to the label ("WH Warehouse"), and
+        even the styled active-item badge was visual clutter next to a
+        name that's already self-explanatory. Dropped entirely rather
+        than half-fixed.
         """
-        _icon = MODULE_ICONS.get(mod, '—')
         if st.session_state.app_mode == mod:
             st.markdown(
-                f'<span class="sidebar-active-nav">'
-                f'<span class="nav-monogram">{_icon}</span>{mod}{badge_html}'
-                f'</span>',
+                f'<span class="sidebar-active-nav">{mod}{badge_html}</span>',
                 unsafe_allow_html=True,
             )
         else:
             # Inject the numeric count into the button label as plain text
             _btn_suffix = f"  ({_ac_pending_n})" if badge_html else ""
-            if st.button(f"{_icon}   {mod}{_btn_suffix}", key=f"side_{mod}"):
+            if st.button(f"{mod}{_btn_suffix}", key=f"side_{mod}"):
                 st.session_state.app_mode = mod
                 st.rerun()
 
@@ -1685,10 +1984,19 @@ with st.sidebar:
         st.session_state.user_profile     = None
         st.session_state.global_search_q  = ""
         st.rerun()
+    st.markdown(
+        '<div style="margin-top:2.5rem;text-align:center;font-size:0.7rem;'
+        'color:#94a3b8;letter-spacing:0.04em;">Version Aleph</div>',
+        unsafe_allow_html=True,
+    )
 
 st.markdown('<div class="main-title">Appointed Time Printing Ltd.</div>', unsafe_allow_html=True)
 st.markdown('<div class="main-subtitle">Secured Capacity Planning Engine</div>', unsafe_allow_html=True)
 app_mode = st.session_state.app_mode
+
+if app_mode != "Raise Job Order" and st.session_state.get("resubmit_order_data") is not None:
+    st.session_state.resubmit_order_data  = None
+    st.session_state.resubmit_active_dept = None
 
 # ═══════════════════════════════════════════════════════════════════
 # ROUTE 1: COMMAND CENTER  (dept-aware)
@@ -2083,6 +2391,21 @@ elif app_mode == "Raise Job Order":
             return float(resubmit_data.get(key, default) or default) if resubmit_data else default
         def _rdi(key, default=0):
             return int(resubmit_data.get(key, default) or default) if resubmit_data else default
+        def _rdd(key, default=None):
+            raw = resubmit_data.get(key) if resubmit_data else None
+            if isinstance(raw, datetime):
+                return raw.date()
+            if raw:
+                try:
+                    return datetime.fromisoformat(str(raw)).date()
+                except (ValueError, TypeError):
+                    pass
+            return default or datetime.now().date()
+        def _rdl(key, opts):
+            raw = _rd(key)
+            if not raw or raw == "None":
+                return []
+            return [p.strip() for p in raw.split(",") if p.strip() in opts]
 
         _resub_dept = resubmit_data.get("department", "PRESS")
  
@@ -2108,8 +2431,8 @@ elif app_mode == "Raise Job Order":
                                                 step=100.0, value=_rdf("total_amount"))
                 rg_d_amt  = _rgf2.number_input("Deposit Paid (GHS)",         min_value=0.0,
                                                 step=100.0, value=_rdf("deposit_amount"))
-                rg_b_due  = _rgf3.date_input("Balance Deadline ★")
-                rg_c_date = _rgf4.date_input("Collection Date ★")
+                rg_b_due  = _rgf3.date_input("Balance Deadline ★", value=_rdd("balance_due_date"))
+                rg_c_date = _rgf4.date_input("Collection Date ★",  value=_rdd("date_of_collection"))
  
                 # ── Quantity & Material Source ───────────────────────────
                 st.markdown('<div class="form-group-header">Production Quantity & Sourcing</div>',
@@ -2314,6 +2637,153 @@ elif app_mode == "Raise Job Order":
                     return int(resubmit_data.get(key, default) or default) if resubmit_data else default
 
                 _resub_dept = resubmit_data.get("department", "PRESS")
+
+                def _rdd(key, default=None):
+                    raw = resubmit_data.get(key) if resubmit_data else None
+                    if isinstance(raw, datetime):
+                        return raw.date()
+                    if raw:
+                        try:
+                            return datetime.fromisoformat(str(raw)).date()
+                        except (ValueError, TypeError):
+                            pass
+                    return default or datetime.now().date()
+                def _rdl(key, opts):
+                    raw = _rd(key)
+                    if not raw or raw == "None":
+                        return []
+                    return [p.strip() for p in raw.split(",") if p.strip() in opts]
+
+                # ── PRESS RESUBMIT FORM ──────────────────────────────────────────
+                with st.form("resubmit_press_form", clear_on_submit=True):
+
+                    st.markdown('<div class="form-group-header">Client Identity & Contract Outline</div>',
+                                unsafe_allow_html=True)
+                    _rp1, _rp2 = st.columns(2)
+                    rp_c_name  = _rp1.text_input("Customer Name ★",    value=_rd("customer_name"))
+                    rp_c_phone = _rp2.text_input("Telephone Number ★", value=_rd("telephone_number"))
+
+                    rp_j_desc = st.text_area("Item Description ★", value=_rd("job_description"))
+
+                    st.markdown('<div class="form-group-header">Financial Ledgers & Scheduling</div>',
+                                unsafe_allow_html=True)
+                    _rpf1, _rpf2, _rpf3, _rpf4 = st.columns(4)
+                    rp_t_amt  = _rpf1.number_input("Total Item Amount (GHS) ★", min_value=0.0,
+                                                    step=100.0, value=_rdf("total_amount"))
+                    rp_d_amt  = _rpf2.number_input("Deposit Paid (GHS)",         min_value=0.0,
+                                                    step=100.0, value=_rdf("deposit_amount"))
+                    rp_b_due  = _rpf3.date_input("Balance Deadline ★", value=_rdd("balance_due_date"))
+                    rp_c_date = _rpf4.date_input("Collection Date ★",  value=_rdd("date_of_collection"))
+
+                    st.markdown('<div class="form-group-header">Production Quantity & Category</div>',
+                                unsafe_allow_html=True)
+                    _rpq1, _rpq2, _rpq3 = st.columns(3)
+                    rp_qty = _rpq1.number_input("Quantity ★", min_value=0, step=500, value=_rdi("qty_to_print"))
+
+                    _rppc_opts  = ["", "OFFSET", "DIGITAL PRESS", "PACKAGING"]
+                    _rppc_exist = _rd("type_of_print")
+                    rp_type_print = _rpq2.selectbox(
+                        "Print Category ★", _rppc_opts,
+                        index=_rppc_opts.index(_rppc_exist) if _rppc_exist in _rppc_opts else 0)
+
+                    _rpmat_opts  = ["", "Customer Material", "Company Material"]
+                    _rpmat_exist = _rd("material_source")
+                    rp_mat_source = _rpq3.selectbox(
+                        "Material Source", _rpmat_opts,
+                        index=_rpmat_opts.index(_rpmat_exist) if _rpmat_exist in _rpmat_opts else 0)
+
+                    _rpdel_opts  = ["Company Delivery", "Client Pickup"]
+                    _rpdel_exist = _rd("delivery_mode")
+                    rp_delivery = st.selectbox(
+                        "Delivery Mode", _rpdel_opts,
+                        index=_rpdel_opts.index(_rpdel_exist) if _rpdel_exist in _rpdel_opts else 0)
+
+                    st.markdown('<div class="form-group-header">Material & Engineering Specifics</div>',
+                                unsafe_allow_html=True)
+                    _rpp1, _rpp2, _rpp3, _rpp4 = st.columns(4)
+                    rp_p_size   = _rpp1.text_input("Print Size",     value=_rd("print_size"))
+                    rp_f_size   = _rpp2.text_input("Finished Size",  value=_rd("finished_print_size"))
+                    rp_pap_type = _rpp3.text_input("Paper Material", value=_rd("paper_type"))
+                    rp_pap_gsm  = _rpp4.text_input("GSM",            value=_rd("gsm"))
+                    _rpx1, _rpx2, _rpx3 = st.columns(3)
+                    rp_pap_size = _rpx1.text_input("Paper Size",         value=_rd("paper_size"))
+                    rp_pap_col  = _rpx2.text_input("Colour / Ink Specs", value=_rd("paper_colour"))
+                    rp_imp_col  = _rpx3.text_input("Impressions",        value=_rd("impressions_colour"))
+
+                    _rpbind_opts = ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"]
+                    rp_b_type = st.multiselect("Binding Selection", _rpbind_opts,
+                                                default=_rdl("binding_type", _rpbind_opts))
+                    _rplam_opts = ["Gloss Laminating", "Matt Laminating", "Soft Touch", "UV-Varnish"]
+                    rp_l_type = st.multiselect("Laminating Selection", _rplam_opts,
+                                                default=_rdl("laminating_type", _rplam_opts))
+
+                    st.info(f"Handled By: {st.session_state.user_email} | Date: {datetime.now().strftime('%Y-%m-%d')}")
+                    rp_submit = st.form_submit_button("🔄 RESUBMIT FOR MANAGEMENT APPROVAL", use_container_width=True)
+
+                    if rp_submit:
+                        _rp_missing = []
+                        if not rp_c_name.strip():  _rp_missing.append("Customer Name")
+                        if not rp_c_phone.strip(): _rp_missing.append("Telephone Number")
+                        if not rp_j_desc.strip():  _rp_missing.append("Item Description")
+                        if rp_t_amt <= 0.0:        _rp_missing.append("Total Item Amount")
+                        if rp_qty <= 0:            _rp_missing.append("Quantity")
+                        if not rp_type_print:      _rp_missing.append("Print Category")
+
+                        if not _rp_missing:
+                            _rp_orig_pgid = resubmit_data.get("parent_group_id", None)
+                            rp_payload = {
+                                "customer_name":       sanitize_string(rp_c_name),
+                                "telephone_number":    sanitize_string(rp_c_phone),
+                                "job_description":     sanitize_string(rp_j_desc),
+                                "total_amount":        float(rp_t_amt),
+                                "deposit_amount":      float(rp_d_amt),
+                                "balance_due_date":    rp_b_due.isoformat(),
+                                "date_of_collection":  rp_c_date.isoformat(),
+                                "qty_to_print":        int(rp_qty),
+                                "type_of_print":       rp_type_print,
+                                "material_source":     rp_mat_source,
+                                "print_size":          sanitize_string(rp_p_size),
+                                "finished_print_size": sanitize_string(rp_f_size),
+                                "paper_type":          sanitize_string(rp_pap_type),
+                                "gsm":                 sanitize_string(rp_pap_gsm),
+                                "paper_size":          sanitize_string(rp_pap_size),
+                                "paper_colour":        sanitize_string(rp_pap_col),
+                                "impressions_colour":  rp_imp_col,
+                                "delivery_mode":       rp_delivery,
+                                "binding_type":        ", ".join(rp_b_type) if rp_b_type else "None",
+                                "laminating_type":     ", ".join(rp_l_type) if rp_l_type else "None",
+                                # Garment-only fields explicitly null for schema safety
+                                "print_type": None, "yardage": None, "packaging_mode": None,
+                                "process_info": None, "material_description": None,
+                                "department":  "PRESS",
+                                "status":      "Pending Approval",
+                                "created_by":  st.session_state.user_email,
+                            }
+                            if _rp_orig_pgid:
+                                rp_payload["parent_group_id"] = _rp_orig_pgid
+
+                            try:
+                                _rp_res    = supabase.table("job_orders").insert(rp_payload).execute()
+                                _rp_gen_no = (
+                                    _rp_res.data[0].get("job_order_no", f"AT-{random.randint(10000,99999)}")
+                                    if _rp_res.data else f"AT-{random.randint(10000,99999)}"
+                                )
+                                rp_payload["job_order_no"] = _rp_gen_no
+                                rp_payload["order_date"]   = datetime.now().strftime("%Y-%m-%d")
+
+                                st.session_state.last_raised_order         = rp_payload
+                                st.session_state.last_raised_batch         = []
+                                st.session_state.last_raised_garment_batch = []
+                                st.session_state.resubmit_order_data       = None
+                                st.session_state.resubmit_active_dept      = None
+
+                                send_resend_notification(rp_payload)
+                                st.toast("Press order resubmitted and routed to management authorization queue.", icon="✅")
+                                st.rerun()
+                            except Exception as _rp_err:
+                                st.error(f"Failed to resubmit press order: {str(_rp_err)}")
+                        else:
+                            st.error(f"Transaction blocked. Missing required fields: {', '.join(_rp_missing)}")
 
         if st.session_state.last_raised_order is not None:
             ticket = st.session_state.last_raised_order
@@ -3539,6 +4009,7 @@ elif app_mode == "Authorization Center" and is_admin:
                                         _n_row['approved_by']   = _ac_fullname
                                         _n_row['approval_date'] = locals().get('_approval_ts', '')
                                         notify_order_approved(_n_row)
+                                        notify_needs_scheduling(_n_row)
                                     except Exception:
                                         logger.exception(
                                             "notify_order_approved lookup/send failed for order id=%s.",
@@ -3718,40 +4189,6 @@ elif app_mode == "Approved Orders Archive" and is_admin:
             _tr_balance = _tr_total - _tr_deposit
             with st.expander(f"Order Operations: {selected_order_no}", expanded=True):
 
-                # ── C12b-i: Lifecycle transition buttons ─────────────────────
-                st.markdown("**📊 Lifecycle Status Transition**")
-                _lc1, _lc2, _lc3 = st.columns(3)
-                if _tr_status == 'Approved':
-                    if _lc1.button("⚙️ Move to In Production",
-                                   key=f"lc_prod_{selected_order_no}", use_container_width=True):
-                        if update_order_lifecycle_status(str(target_row['id']), 'In Production'):
-                            st.success(f"{selected_order_no} → In Production.")
-                            st.rerun()
-                        else:
-                            st.error("Status update failed.")
-                elif _tr_status == 'In Production':
-                    if _lc2.button("📦 Mark Ready for Collection",
-                                   key=f"lc_ready_{selected_order_no}", use_container_width=True):
-                        if update_order_lifecycle_status(str(target_row['id']), 'Ready for Collection'):
-                            st.success(f"{selected_order_no} → Ready for Collection.")
-                            st.rerun()
-                        else:
-                            st.error("Status update failed.")
-                elif _tr_status == 'Ready for Collection':
-                    if _lc3.button("🎯 Mark as Delivered",
-                                   key=f"lc_del_{selected_order_no}", use_container_width=True):
-                        if update_order_lifecycle_status(str(target_row['id']), 'Delivered'):
-                            st.success(f"{selected_order_no} → Delivered. ✓")
-                            st.rerun()
-                        else:
-                            st.error("Status update failed.")
-                else:
-                    st.markdown(
-                        f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;'
-                        f'padding:0.5rem 0.85rem;font-size:0.85rem;color:#15803d;font-weight:600;">'
-                        f'&#x2705; Current Status: {_tr_status}</div>',
-                        unsafe_allow_html=True)
-
                 # ── C12b-ii: Balance payment recording ───────────────────────
                 if _tr_balance > 0:
                     st.markdown("<hr style='margin:1rem 0;border-top:1px solid #e2e8f0;'>",
@@ -3874,6 +4311,17 @@ elif app_mode == "Approved Orders Archive" and is_admin:
                         except Exception as _del_err:
                             st.error(f"Deletion failed: {str(_del_err)}")
 
+
+# ═══════════════════════════════════════════════════════════════════
+# ROUTE 4a: WAREHOUSE (receiving + finance handoff — see warehouse.py's
+# module docstring for why this is separate from Dispatch)
+# ═══════════════════════════════════════════════════════════════════
+elif app_mode == "Warehouse":
+    render_warehouse_module(
+        get_db_job_orders_multi_status,
+        notify_ready_for_finance,
+        currency=CURRENCY,
+    )
 
 # ═══════════════════════════════════════════════════════════════════
 # ROUTE 4a-b: DISPATCH (payment logging + finalize — runs alongside
@@ -4008,8 +4456,15 @@ elif app_mode == "Production Layout Builder" and is_admin:
                 for _ci in range(int(_num_components)):
                     _cc1, _cc2 = st.columns(2)
                     _comp_machine = _cc1.selectbox(f"Press Machine — Component {_ci+1}", _press_opts, key=f"comp_machine_{_ci}")
-                    _comp_imps    = _cc2.number_input(f"Total Impressions — Component {_ci+1}", min_value=1,
-                                                       value=int(lf_total_qty), key=f"comp_imps_{_ci}")
+                    # Default assumes N-up printing: total_qty finished pieces need
+                    # total_qty / ups actual press impressions, not total_qty itself
+                    # (matches how Die Cutter's own quantity is already computed below).
+                    # Still editable — this is a sane default, not a hard rule, since
+                    # some components (e.g. a cover run) may not follow the job's ups.
+                    _comp_default_imps = int(math.ceil(lf_total_qty / max(1, lf_type_id)))
+                    _comp_imps    = _cc2.number_input(f"Press Impressions — Component {_ci+1}", min_value=1,
+                                                       value=_comp_default_imps, key=f"comp_imps_{_ci}",
+                                                       help=f"Defaults to {lf_total_qty:,} qty ÷ {lf_type_id} ups = {_comp_default_imps:,} press impressions.")
                     components.append({"machines": [_comp_machine], "impressions": _comp_imps})
                 st.markdown('<div class="form-group-header">Post-Press & Finishing Machines</div>', unsafe_allow_html=True)
                 _finishing_opts = [m for m in MACHINE_DATA.keys() if not any(k in m.upper() for k in ['SM', 'GTO', 'CANON'])]
@@ -4017,6 +4472,34 @@ elif app_mode == "Production Layout Builder" and is_admin:
                     "Select Finishing Machines (applied in order: Die Cutter → Folder Gluer → Others)",
                     _finishing_opts
                 )
+
+                # ── Pre-flight sanity check — catches a fat-fingered quantity
+                # (extra zero) before it silently jams a machine's schedule.
+                _lf_flags = []
+                for _ci, _c in enumerate(components):
+                    _d = _estimate_working_days(_c['impressions'], _c['machines'][0])
+                    if _d > STAGE_DAYS_WARNING_THRESHOLD:
+                        _lf_flags.append(
+                            f"Component {_ci+1} ({_c['machines'][0]}): "
+                            f"~{_d:.0f} working days for {_c['impressions']:,} impressions"
+                        )
+                for _fm in lf_finishing:
+                    _d = _estimate_working_days(lf_total_qty, _fm)
+                    if _d > STAGE_DAYS_WARNING_THRESHOLD:
+                        _lf_flags.append(f"{_fm}: ~{_d:.0f} working days for {lf_total_qty:,} units")
+
+                _lf_override = False
+                if _lf_flags:
+                    st.markdown(
+                        '<div style="background:#fef2f2;border:1px solid #fca5a5;border-left:4px solid #ef4444;'
+                        'border-radius:8px;padding:0.75rem 1.1rem;margin:0.75rem 0;font-size:0.85rem;color:#991b1b;">'
+                        '<strong>This schedule looks unusually long — double-check quantities before committing:</strong>'
+                        '<ul style="margin:0.4rem 0 0 1.1rem;padding:0;">'
+                        + "".join(f"<li>{f}</li>" for f in _lf_flags) +
+                        '</ul></div>', unsafe_allow_html=True)
+                    _lf_override = st.checkbox(
+                        "I've double-checked these quantities and want to commit this schedule anyway")
+
                 st.markdown("<br>", unsafe_allow_html=True)
                 lf_submit = st.form_submit_button("CALCULATE SCHEDULE & COMMIT TO PRODUCTION PLAN",
                                                    use_container_width=True, type="primary")
@@ -4024,10 +4507,13 @@ elif app_mode == "Production Layout Builder" and is_admin:
                     _lf_missing = []
                     if not lf_job_name.strip(): _lf_missing.append("Job Name")
                     if lf_total_qty < 1:        _lf_missing.append("Total Quantity")
+                    if _lf_flags and not _lf_override:
+                        _lf_missing.append("confirmation of the unusually long schedule flagged above")
                     if not _lf_missing:
                         with st.spinner("Calculating optimal schedule across machine availability windows..."):
                             add_multi_part_job({
                                 "name":               sanitize_string(lf_job_name),
+                                "job_order_no":       str(_plb_row.get('job_order_no', '')),
                                 "sales_rep":          sanitize_string(lf_sales_rep),
                                 "start_date":         lf_start_date,
                                 "total_qty":          int(lf_total_qty),
@@ -4036,6 +4522,7 @@ elif app_mode == "Production Layout Builder" and is_admin:
                                 "components":         components,
                                 "finishing_machines": lf_finishing
                             })
+                        update_order_lifecycle_status(str(_plb_row['id']), 'In Production')
                         st.success(f"Production plan committed for '{lf_job_name}'. Machine schedule written to Shop Floor Control.")
                         st.rerun()
                     else:
@@ -4055,9 +4542,10 @@ elif app_mode == "Production Board":
     # this is a deliberate split between old and new style, not an
     # oversight — rewriting the original five to match was out of scope.
     render_production_board(
-        get_db_job_orders, update_order_lifecycle_status,
+        get_db_job_orders_multi_status, update_order_lifecycle_status,
         generate_pdf_export=handle_production_pdf_export,
         currency=CURRENCY, send_departmental_alert=send_departmental_alert,
+        notify_sent_to_warehouse=notify_sent_to_warehouse,
         user_department=st.session_state.get("user_profile", {}).get("department", "NONE")
     )
 
@@ -4065,122 +4553,156 @@ elif app_mode == "Production Board":
 # ROUTE 6: SHOP FLOOR CONTROL PANEL
 # ═══════════════════════════════════════════════════════════════════
 elif app_mode == "Shop Floor Control":
-    st.markdown('<div class="section-header">Live Shop Floor Control & Machine Status Board</div>',
-                unsafe_allow_html=True)
-    floor_df = get_db_jobs()
-    if floor_df.empty:
-        st.info("No active production runs found. Use the Production Layout Builder to schedule approved orders.")
+    st.markdown('<div class="section-header">Live Production Timeline</div>', unsafe_allow_html=True)
+    now_utc = datetime.now(timezone.utc)
+
+    # ── Tier 1: management summary — one bar per order, health-coloured ──
+    st.markdown("**Production Pipeline — every order in flight**")
+    _show_completed = st.checkbox("Show completed orders too", value=False)
+    pipeline_df = get_job_pipeline_status(active_only=not _show_completed)
+
+    _selected_order = None
+    if pipeline_df.empty:
+        st.info("No orders currently in production. Use the Production Layout Builder to schedule an approved order.")
     else:
-        now_utc = datetime.now(timezone.utc)
-        floor_df['start_time']  = pd.to_datetime(floor_df['start_time'],  utc=True, format='mixed', errors='coerce')
-        floor_df['finish_time'] = pd.to_datetime(floor_df['finish_time'], utc=True, format='mixed', errors='coerce')
-        for machine_name, machine_df in floor_df.groupby('machine'):
-            machine_df     = machine_df.sort_values('finish_time').copy()
-            mach_meta      = MACHINE_DATA.get(machine_name, {'rate': 1000, 'setup_hours': 1.0})
-            active_jobs    = machine_df[machine_df['finish_time'] >= now_utc]
-            completed_jobs = machine_df[machine_df['finish_time'] <  now_utc]
-            is_active      = not active_jobs.empty
-            queued_count   = max(0, len(active_jobs) - 1)
-            _sf_badge = (
-                '<span class="sf-status-badge sf-badge-active">● ACTIVE RUN</span>'
-                if is_active else
-                '<span class="sf-status-badge sf-badge-idle">○ IDLE</span>'
+        pipeline_df = pipeline_df.assign(
+            _hover_current=pipeline_df['current_stage'].fillna('—'),
+            _hover_next=pipeline_df['next_stage'].fillna('Final stage'),
+            _hover_progress=pipeline_df.apply(
+                lambda r: f"{int(r['stages_complete'])}/{int(r['stage_count'])} stages complete", axis=1),
+            _hover_eta=pipeline_df['projected_completion'].dt.strftime('%d %b %Y'),
+        )
+        _pipe_fig = px.timeline(
+            pipeline_df.sort_values('scheduled_start'),
+            x_start="scheduled_start", x_end="projected_completion",
+            y="label", color="health",
+            color_discrete_map={"On Track": "#10b981", "At Risk": "#f59e0b", "Late": "#ef4444"},
+            hover_data=["_hover_current", "_hover_next", "_hover_progress", "_hover_eta"],
+        )
+        _pipe_fig.update_traces(
+            hovertemplate="<b>%{y}</b><br>"
+                          "Currently: %{customdata[0]}<br>"
+                          "Next: %{customdata[1]}<br>"
+                          "%{customdata[2]} &middot; Est. completion %{customdata[3]}"
+                          "<extra></extra>"
+        )
+        _pipe_fig.update_yaxes(autorange="reversed", title=None)
+        _pipe_fig.add_vline(x=now_utc, line_dash="dash", line_color="#0f172a")
+        _pipe_fig.update_layout(
+            height=max(280, 46 * pipeline_df['label'].nunique()),
+            font=dict(family="Segoe UI, sans-serif", color="#0f172a"),
+            plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+            legend_title_text="Health",
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        st.plotly_chart(_pipe_fig, use_container_width=True, config={'displayModeBar': False})
+
+        st.divider()
+        st.markdown("**Drill Down — stage-by-stage detail for one order**")
+        _order_opts = pipeline_df.sort_values('label')['job_order_no'].tolist()
+        _selected_order = st.selectbox(
+            "Order", _order_opts,
+            format_func=lambda o: pipeline_df.loc[pipeline_df['job_order_no'] == o, 'label'].iloc[0],
+        )
+
+    # ── Tier 2: floor detail for exactly one order ──
+    if _selected_order:
+        floor_df = get_shop_floor_timeline()
+        floor_df = floor_df[floor_df.get('job_order_no') == _selected_order] if not floor_df.empty else floor_df
+        if floor_df.empty:
+            st.info("No stage-level schedule found for this order yet.")
+        else:
+            floor_df = floor_df.assign(
+                _hover_status=floor_df['stage_status'] if 'stage_status' in floor_df.columns else 'Scheduled',
+                _hover_start=floor_df['start_time'].dt.strftime('%d %b, %I:%M %p'),
+                _hover_finish=floor_df['effective_finish'].dt.strftime('%d %b, %I:%M %p'),
+                _hover_qty=floor_df['quantity'].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
+                _hover_value=floor_df['contract_value'].apply(lambda v: f"{CURRENCY} {float(v):,.2f}" if pd.notna(v) else "—"),
             )
-            if queued_count > 0:
-                _sf_badge += (f'<span class="sf-status-badge sf-badge-queued" '
-                              f'style="margin-left:0.4rem;">{queued_count} QUEUED</span>')
-            st.markdown(
-                f'<div class="sf-machine-card">'
-                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
-                f'<div>{_sf_badge}'
-                f'<div class="sf-machine-name">{machine_name}</div>'
-                f'<div style="font-size:0.8rem;color:#64748b;">'
-                f'Rate: {mach_meta["rate"]:,} impressions/hr &nbsp;·&nbsp; Setup: {mach_meta["setup_hours"]}h</div>'
-                f'</div>'
-                f'<div style="text-align:right;">'
-                f'<div style="font-size:0.65rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.15rem;">Jobs on Record</div>'
-                f'<div style="font-size:1.6rem;font-weight:800;color:#0f172a;">{len(machine_df)}</div>'
-                f'</div></div>', unsafe_allow_html=True)
-            if is_active:
-                current_job = active_jobs.iloc[0]
-                elapsed_td  = (now_utc - current_job['start_time'] if pd.notna(current_job['start_time']) else timedelta(0))
-                total_td    = (current_job['finish_time'] - current_job['start_time']
-                               if pd.notna(current_job['start_time']) else timedelta(hours=1))
-                pct_done = min(100.0, max(0.0, (elapsed_td.total_seconds() / max(total_td.total_seconds(), 1)) * 100))
-                pct_int  = int(pct_done)
-                st.markdown(
-                    f'<div style="margin-top:1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem 1.25rem;">'
-                    f'<div class="sf-progress-label">'
-                    f'<span>Active: {current_job.get("job_name","—")} [TID: {current_job.get("tracking_id","—")}]</span>'
-                    f'<span>{pct_int}% complete</span></div>'
-                    f'<div class="sf-progress-track">'
-                    f'<div style="background:linear-gradient(90deg,#0369a1,#0ea5e9);height:100%;width:{pct_int}%;transition:width 0.4s ease;"></div></div>'
-                    f'<div style="display:flex;gap:2rem;margin-top:0.75rem;font-size:0.8rem;color:#64748b;">'
-                    f'<span>Impressions: <strong>{int(current_job.get("impressions",0)):,}</strong></span>'
-                    f'<span>Qty: <strong>{int(current_job.get("quantity",0)):,}</strong></span>'
-                    f'<span>Value: <strong>{CURRENCY} {float(current_job.get("contract_value",0)):,.2f}</strong></span>'
-                    f'<span>ETA: <strong>'
-                    f'{current_job["finish_time"].strftime("%d %b %H:%M") if pd.notna(current_job["finish_time"]) else "—"}'
-                    f'</strong></span></div></div>', unsafe_allow_html=True)
-            if queued_count > 0:
-                with st.expander(f"View {queued_count} Queued Job(s) on {machine_name}"):
-                    for _, _qjob in active_jobs.iloc[1:].iterrows():
-                        st.markdown(
-                            f'<div style="background:#fefce8;border:1px solid #fde047;border-radius:6px;'
-                            f'padding:0.6rem 0.9rem;margin-bottom:0.4rem;font-size:0.85rem;">'
-                            f'<strong>{_qjob.get("job_name","—")}</strong> &nbsp;·&nbsp; '
-                            f'{int(_qjob.get("impressions",0)):,} impressions &nbsp;·&nbsp; '
-                            f'Start: {_qjob["start_time"].strftime("%d %b %H:%M") if pd.notna(_qjob["start_time"]) else "—"}'
-                            f' &nbsp;·&nbsp; '
-                            f'Finish: {_qjob["finish_time"].strftime("%d %b %H:%M") if pd.notna(_qjob["finish_time"]) else "—"}'
-                            f'</div>', unsafe_allow_html=True)
-            if not completed_jobs.empty:
-                with st.expander(f"Completed Runs on {machine_name} ({len(completed_jobs)})"):
-                    for _, _cjob in completed_jobs.sort_values('finish_time', ascending=False).iterrows():
-                        st.markdown(
-                            f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;'
-                            f'padding:0.6rem 0.9rem;margin-bottom:0.4rem;font-size:0.85rem;color:#15803d;">'
-                            f'✓ <strong>{_cjob.get("job_name","—")}</strong> &nbsp;·&nbsp; '
-                            f'{int(_cjob.get("quantity",0)):,} units &nbsp;·&nbsp; '
-                            f'Completed: {_cjob["finish_time"].strftime("%d %b %Y %H:%M") if pd.notna(_cjob["finish_time"]) else "—"}'
-                            f'</div>', unsafe_allow_html=True)
-            # ── C13: Floor operator manual status override ───────────────────
-            with st.expander(f"Operator Update — {machine_name}", expanded=False):
-                st.markdown(
-                    '<div style="font-size:0.8rem;color:#64748b;margin-bottom:0.5rem;">'
-                    'Mark a specific job as <strong>On Hold</strong> or <strong>Completed</strong> '
-                    'when the schedule-derived progress bar does not reflect reality.</div>',
-                    unsafe_allow_html=True)
-                _op_jobs = machine_df['tracking_id'].dropna().unique().tolist()
-                if _op_jobs:
-                    _op_col1, _op_col2, _op_col3 = st.columns([2, 2, 1])
-                    with _op_col1:
-                        _op_tid = st.selectbox(
-                            "Job (Tracking ID)",
-                            _op_jobs,
-                            key=f"op_tid_{machine_name}",
-                            label_visibility="collapsed")
-                    with _op_col2:
-                        _op_status = st.selectbox(
-                            "New Status",
-                            ["Running", "On Hold", "Completed"],
-                            key=f"op_status_{machine_name}",
-                            label_visibility="collapsed")
-                    with _op_col3:
-                        if st.button("Update", key=f"op_upd_{machine_name}",
-                                     use_container_width=True, type="primary"):
-                            try:
-                                supabase.table('jobs').update(
-                                    {"operator_status": _op_status}
-                                ).eq('tracking_id', _op_tid).execute()
-                                st.success(f"TID {_op_tid} → {_op_status}")
-                                st.rerun()
-                            except Exception as _op_err:
-                                st.error(f"Update failed: {_op_err}")
-                else:
-                    st.info("No jobs currently scheduled on this machine.")
-            st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
+            _sort_col = 'sequence_no' if 'sequence_no' in floor_df.columns else 'start_time'
+            _color_col = 'stage_status' if 'stage_status' in floor_df.columns else 'machine'
+            _order_fig = px.timeline(
+                floor_df.sort_values(_sort_col),
+                x_start="start_time", x_end="effective_finish",
+                y="machine", color=_color_col,
+                color_discrete_map={"Scheduled": "#94a3b8", "In Progress": "#0369a1",
+                                     "Delayed": "#ef4444", "Complete": "#10b981", "On Hold": "#f59e0b"},
+                hover_data=["_hover_status", "_hover_start", "_hover_finish", "_hover_qty", "_hover_value"],
+            )
+            _order_fig.update_traces(
+                hovertemplate="<b>%{y}</b><br>"
+                              "%{customdata[0]}<br>"
+                              "%{customdata[1]} → %{customdata[2]}<br>"
+                              "Qty: %{customdata[3]} &middot; Value: %{customdata[4]}"
+                              "<extra></extra>"
+            )
+            _order_fig.update_yaxes(autorange="reversed", title=None)
+            _order_fig.add_vline(x=now_utc, line_dash="dash", line_color="#0f172a")
+            _order_fig.update_layout(
+                height=max(220, 46 * floor_df['machine'].nunique()),
+                font=dict(family="Segoe UI, sans-serif", color="#0f172a"),
+                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                legend_title_text="Stage Status",
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+            st.plotly_chart(_order_fig, use_container_width=True, config={'displayModeBar': False})
+
+            with st.expander("Operator Update"):
+                _op_tids = floor_df['tracking_id'].dropna().unique().tolist()
+                _op_tid = st.selectbox(
+                    "Stage", _op_tids,
+                    format_func=lambda t: floor_df.loc[floor_df['tracking_id'] == t, 'machine'].iloc[0]
+                                if (floor_df['tracking_id'] == t).any() else t,
+                )
+                _op_status = st.selectbox("Status", ["In Progress", "Delayed", "On Hold", "Complete"])
+                _op_new_eta = None
+                if _op_status in ("Delayed", "Complete"):
+                    _op_new_eta = st.date_input(
+                        "New finish date" if _op_status == "Delayed" else "Actual finish date",
+                        value=datetime.now().date())
+                if st.button("Update Stage Status"):
+                    _eta_dt = (datetime.combine(_op_new_eta, datetime.now().time()).replace(tzinfo=timezone.utc)
+                               if _op_new_eta else None)
+                    update_stage_status(_op_tid, _op_status, revised_finish=_eta_dt)
+                    st.success("Updated — downstream stages recalculated if this pushed the schedule.")
+                    st.rerun()
+
+    # ── Whole-shop machine view — capacity planning, independent of any one order ──
+    with st.expander("Machine Utilisation — whole shop", expanded=False):
+        _all_floor_df = get_shop_floor_timeline()
+        if _all_floor_df.empty:
+            st.caption("Nothing scheduled.")
+        else:
+            _all_floor_df = _all_floor_df.assign(_run_status=_all_floor_df.apply(
+                lambda r: "Completed" if r['finish_time'] < now_utc
+                          else "Active" if r['start_time'] <= now_utc <= r['finish_time']
+                          else "Queued", axis=1))
+            _all_floor_df = _all_floor_df.assign(
+                _hover_qty=_all_floor_df['quantity'].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
+            )
+            _mach_fig = px.timeline(
+                _all_floor_df.sort_values('start_time'),
+                x_start="start_time", x_end="effective_finish",
+                y="machine", color="_run_status",
+                color_discrete_map={"Active": "#0369a1", "Queued": "#f59e0b", "Completed": "#94a3b8"},
+                hover_data=["client_label", "_hover_qty"],
+            )
+            _mach_fig.update_traces(
+                hovertemplate="<b>%{y}</b><br>"
+                              "%{customdata[0]}<br>"
+                              "Qty: %{customdata[1]}"
+                              "<extra></extra>"
+            )
+            _mach_fig.update_yaxes(autorange="reversed", title=None)
+            _mach_fig.add_vline(x=now_utc, line_dash="dash", line_color="#ef4444")
+            _mach_fig.update_layout(
+                height=max(280, 40 * _all_floor_df['machine'].nunique()),
+                font=dict(family="Segoe UI, sans-serif", color="#0f172a"),
+                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                legend_title_text="Run Status",
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+            st.plotly_chart(_mach_fig, use_container_width=True, config={'displayModeBar': False})
 
 # ═══════════════════════════════════════════════════════════════════
 # ROUTE 7: MY ORDER TRACKER  (dept-aware PDF dispatch + tab isolation)
@@ -4192,6 +4714,11 @@ elif app_mode == "My Order Tracker":
     if my_all_orders.empty:
         st.info("No job orders found under your account. Use 'Raise Job Order' to submit your first contract.")
     else:
+        _ot_prod_order_nos = my_all_orders.loc[
+            my_all_orders['status'].isin(["In Production", "At Warehouse"]), 'job_order_no'
+        ].dropna().tolist()
+        _ot_jobs_df = get_jobs_by_order_numbers(_ot_prod_order_nos)
+
         _ot_total   = len(my_all_orders)
         _ot_pending = my_all_orders['status'].isin(["Pending Approval", "Pending Revision Approval"]).sum()
         _ot_approved = (my_all_orders['status'] == "Approved").sum()
@@ -4237,7 +4764,7 @@ elif app_mode == "My Order Tracker":
             _ot_status_filter = st.multiselect(
                 "Status",
                 options=["Pending Approval", "Pending Revision Approval",
-                         "Approved", "Rejected"],
+                         "Approved", "In Production", "At Warehouse", "Delivered", "Rejected"],
                 default=[],
                 key="ot_status_filter",
                 label_visibility="collapsed",
@@ -4341,6 +4868,9 @@ elif app_mode == "My Order Tracker":
                 'Rejected':                  ('#ef4444', '#fee2e2', '✗ REJECTED'),
                 'Pending Approval':          ('#f59e0b', '#fef3c7', '⏳ PENDING APPROVAL'),
                 'Pending Revision Approval': ('#d97706', '#fffbeb', '⚠️ PENDING RE-APPROVAL'),
+                'In Production':             ('#0369a1', '#e0f2fe', '🏭 IN PRODUCTION'),
+                'At Warehouse':              ('#4f46e5', '#eef2ff', '📥 AT WAREHOUSE'),
+                'Delivered':                 ('#059669', '#d1fae5', '🎯 DELIVERED'),
             }
             _s_color, _s_bg, _s_label = _status_map.get(_r_status.strip(), ('#64748b', '#f1f5f9', _r_status.upper()))
             _border_left = f"5px solid {_s_color}"
@@ -4424,6 +4954,35 @@ elif app_mode == "My Order Tracker":
                     f'<strong>⚠️ Revised Contract:</strong> This order was edited after initial approval '
                     f'and is now awaiting fresh management sign-off. No action is required from you at this stage.'
                     f'</div>', unsafe_allow_html=True)
+
+            if _r_status.strip() == "At Warehouse":
+                st.markdown(
+                    '<div style="background:#eef2ff;border:1px solid #c7d2fe;border-left:4px solid #4f46e5;'
+                    'border-radius:8px;padding:0.75rem 1.1rem;margin-top:-0.6rem;margin-bottom:1.1rem;">'
+                    '<div style="font-size:0.75rem;font-weight:700;color:#4338ca;text-transform:uppercase;'
+                    'letter-spacing:0.05em;">📥 At Warehouse — Awaiting Dispatch</div></div>',
+                    unsafe_allow_html=True)
+            elif _r_status.strip() == "In Production":
+                _pl = _pipeline_summary(_r_order_no, _ot_jobs_df)
+                if _pl and not _pl["all_done"]:
+                    _eta_str  = _pl["eta"].strftime("%d %b %Y") if pd.notna(_pl["eta"]) else "—"
+                    _next_str = f' &nbsp;·&nbsp; Next: <strong>{_pl["next_machine"]}</strong>' if _pl["next_machine"] else ''
+                    st.markdown(
+                        f'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0369a1;'
+                        f'border-radius:8px;padding:0.75rem 1.1rem;margin-top:-0.6rem;margin-bottom:1.1rem;">'
+                        f'<div style="font-size:0.75rem;font-weight:700;color:#0369a1;text-transform:uppercase;'
+                        f'letter-spacing:0.05em;margin-bottom:0.2rem;">🏭 In Production</div>'
+                        f'<div style="font-size:0.85rem;color:#0c4a6e;">'
+                        f'Current stage: <strong>{_pl["current_machine"]}</strong>{_next_str}'
+                        f' &nbsp;·&nbsp; Est. completion: <strong>{_eta_str}</strong></div></div>',
+                        unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        '<div style="background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0369a1;'
+                        'border-radius:8px;padding:0.75rem 1.1rem;margin-top:-0.6rem;margin-bottom:1.1rem;">'
+                        '<div style="font-size:0.85rem;color:#0c4a6e;">🏭 In production — detailed schedule '
+                        'not available for this order yet.</div></div>',
+                        unsafe_allow_html=True)
 
             # ── Dept-aware PDF download (LAZY / CACHED — 5-min TTL) ──────
             # _generate_pdf_cached only calls ReportLab on a cache miss.
@@ -4621,4 +5180,3 @@ elif app_mode == "Production Layout Builder" and not is_admin:
         'The Production Layout Builder is reserved for plant administrators. '
         'Use the Raise Job Order module to submit orders for the production pipeline.'
         '</div></div>', unsafe_allow_html=True)
-    
