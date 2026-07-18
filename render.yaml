@@ -27,7 +27,7 @@ services:
   - type: web
     name: appointed-time-hub
     runtime: python
-    plan: starter          # ~$7/mo, always-on, no cold starts. Use "free" to test first (spins down after 15 min idle).
+    plan: free          # ~$7/mo, always-on, no cold starts. Use "free" to test first (spins down after 15 min idle).
     buildCommand: "pip install -r requirements.txt"
     startCommand: "streamlit run app.py --server.port $PORT --server.address 0.0.0.0"
     envVars:
