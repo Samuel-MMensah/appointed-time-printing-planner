@@ -1,0 +1,12 @@
+# .streamlit/config.toml -- safe to commit, contains no secrets itself.
+#
+# Tells Streamlit where to look for secrets.toml. Render's Secret Files
+# always land at /etc/secrets/<filename> (documented, works for every
+# runtime type); the plain ".streamlit/secrets.toml" relative path only
+# also works for non-Docker services AND only if the Filename field in
+# Render's dashboard was typed as exactly ".streamlit/secrets.toml"
+# rather than just "secrets.toml". Listing both here means it works
+# regardless of which one actually happened.
+
+[secrets]
+files = [".streamlit/secrets.toml", "/etc/secrets/secrets.toml"]
