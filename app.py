@@ -18,6 +18,8 @@ import requests
 import logging
 
 import rbac
+from supabase import create_client
+supabase = create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["anon_key"])
 from production import render_production_board
 from dispatch import render_dispatch_module
 from warehouse import render_warehouse_module
