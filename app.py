@@ -19,7 +19,6 @@ import logging
 
 import rbac
 from supabase import create_client
-supabase = create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["anon_key"])
 from production import render_production_board
 from dispatch import render_dispatch_module
 from warehouse import render_warehouse_module
@@ -518,10 +517,11 @@ textarea:focus-visible, select:focus-visible {
 @st.cache_resource
 def init_supabase():
     try:
-        url = st.secrets.get("SUPABASE_URL")
-        key = st.secrets.get("SUPABASE_KEY")
+        _supabase_secrets = st.secrets.get("supabase", {})
+        url = _supabase_secrets.get("url")
+        key = _supabase_secrets.get("anon_key")
         if not url or not key:
-            logger.error("Supabase not initialized: SUPABASE_URL/SUPABASE_KEY missing from st.secrets.")
+            logger.error("Supabase not initialized: [supabase].url/anon_key missing from st.secrets.")
             return None
         return create_client(url, key)
     except Exception:
