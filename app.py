@@ -762,6 +762,35 @@ def get_approved_orders_cached() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def get_orders_trend_cached(days_back: int = 180) -> pd.DataFrame:
+    """
+    Powers the Command Center's weekly/monthly trend chart.
+
+    Deliberately NOT the same pattern as get_approved_orders_cached above —
+    this is bounded by a created_at date filter, not by status, and only
+    selects the handful of columns the trend chart actually needs. That's
+    the point: as job_orders grows into the tens of thousands over years,
+    this query's cost stays tied to "how many orders in the last N days",
+    not "how many orders have ever existed" — so the trend view doesn't
+    get slower every month the business operates.
+    """
+    if not supabase or not st.session_state.get("authenticated"):
+        return pd.DataFrame()
+    try:
+        _cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        res = (
+            supabase.table('job_orders')
+            .select("job_order_no,created_at,total_amount,deposit_amount,status")
+            .gte('created_at', _cutoff)
+            .execute()
+        )
+        return pd.DataFrame(res.data)
+    except Exception:
+        logger.exception("get_orders_trend_cached failed.")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def _generate_pdf_cached(order_id: str, order_status: str,
                           order_dept: str, row_json: str) -> bytes:
     """
@@ -2083,6 +2112,68 @@ if app_mode == "Command Center":
             f'<div class="metric-label">Outstanding Receivables</div>'
             f'<div class="metric-value" style="font-size:1.35rem;color:{_bal_color};">{CURRENCY}{_cc_balance:,.2f}</div></div>',
             unsafe_allow_html=True)
+
+    # ── Trend — jobs raised, revenue, and collections over time ──────────
+    # Everything above this line is a live snapshot: "what's true right
+    # now." That answers "how are we doing today" but not "how did last
+    # month compare to this one" once a reporting cycle has passed —
+    # this section is that missing view, and it's built on a date-bounded
+    # query (see get_orders_trend_cached), not the same "fetch everything
+    # matching a status" pattern the snapshot above uses, so it keeps
+    # performing the same regardless of how many years of orders exist.
+    st.markdown(
+        '<div class="section-header" style="margin-top:2rem;">'
+        'Trend — Jobs, Revenue &amp; Collections</div>', unsafe_allow_html=True)
+    _tr_period = st.radio(
+        "Trend period", ["Weekly", "Monthly"], horizontal=True,
+        key="cc_trend_period", label_visibility="collapsed",
+    )
+    _tr_lookback_days = 180 if _tr_period == "Weekly" else 365
+    _tr_df = get_orders_trend_cached(days_back=_tr_lookback_days)
+    if _tr_df.empty:
+        st.info(f"No orders raised in the last {_tr_lookback_days} days yet.")
+    else:
+        _tr_df['created_at'] = pd.to_datetime(_tr_df['created_at'], utc=True, errors='coerce')
+        _tr_df = _tr_df.dropna(subset=['created_at'])
+        _tr_df['total_amount']   = _tr_df['total_amount'].fillna(0).apply(lambda x: float(x or 0))
+        _tr_df['deposit_amount'] = _tr_df['deposit_amount'].fillna(0).apply(lambda x: float(x or 0))
+        _tr_df['_period'] = (
+            _tr_df['created_at'].dt.to_period('W').apply(lambda p: p.start_time)
+            if _tr_period == "Weekly" else
+            _tr_df['created_at'].dt.to_period('M').apply(lambda p: p.start_time)
+        )
+        _tr_grouped = (
+            _tr_df.groupby('_period')
+            .agg(jobs=('job_order_no', 'nunique'),
+                 revenue=('total_amount', 'sum'),
+                 collections=('deposit_amount', 'sum'))
+            .reset_index()
+            .sort_values('_period')
+        )
+        _tr_left, _tr_right = st.columns([3, 2])
+        with _tr_left:
+            _tr_money_fig = px.bar(
+                _tr_grouped, x='_period', y=['revenue', 'collections'], barmode='group',
+                labels={'_period': _tr_period, 'value': CURRENCY, 'variable': ''},
+                color_discrete_map={'revenue': '#0369a1', 'collections': '#10b981'},
+            )
+            _tr_money_fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                margin=dict(t=10, b=10, l=10, r=10), legend_title_text='',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02),
+            )
+            st.plotly_chart(_tr_money_fig, use_container_width=True)
+        with _tr_right:
+            _tr_jobs_fig = px.line(
+                _tr_grouped, x='_period', y='jobs', markers=True,
+                labels={'_period': _tr_period, 'jobs': 'Jobs Raised'},
+            )
+            _tr_jobs_fig.update_traces(line_color='#0f172a')
+            _tr_jobs_fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                margin=dict(t=10, b=10, l=10, r=10),
+            )
+            st.plotly_chart(_tr_jobs_fig, use_container_width=True)
 
     # ── Charts ───────────────────────────────────────────────────────────
     if not df.empty:
@@ -4179,9 +4270,35 @@ elif app_mode == "Approved Orders Archive" and is_admin:
 
         st.markdown("<hr style='margin:2rem 0;'>", unsafe_allow_html=True)
         st.markdown("### Manage Archived Orders")
+        _arch_search = st.text_input(
+            "Search by order number or customer name",
+            key="arch_manage_search",
+            placeholder="e.g. P966102 or NUTRIFOODS — narrows the list below before you pick",
+        )
+        _arch_candidates = approved_orders
+        if _arch_search.strip():
+            _sq = _arch_search.strip().lower()
+            _arch_candidates = approved_orders[
+                approved_orders['job_order_no'].astype(str).str.lower().str.contains(_sq, na=False)
+                | approved_orders['customer_name'].astype(str).str.lower().str.contains(_sq, na=False)
+            ]
+        elif len(approved_orders) >= ARCHIVE_ROW_CAP:
+            st.caption(
+                f"Showing the most recent {ARCHIVE_ROW_CAP:,} orders — this list is capped so the page stays "
+                f"fast as history grows. If the order you need is older than that, search above, or use "
+                f"Global Search in the sidebar, which searches the full history, not just this cap."
+            )
+        _arch_label_map = dict(zip(
+            _arch_candidates['job_order_no'],
+            _arch_candidates.apply(
+                lambda r: f"{r.get('job_order_no','—')} — {r.get('customer_name','—')} · {r.get('status','—')}",
+                axis=1
+            )
+        ))
         selected_order_no = st.selectbox(
             "Select Order Number to Modify, Export, or Delete:",
-            [""] + approved_orders['job_order_no'].dropna().tolist()
+            [""] + _arch_candidates['job_order_no'].dropna().tolist(),
+            format_func=lambda o: _arch_label_map.get(o, "—") if o else "— Select an order —",
         )
         if selected_order_no:
             target_row  = approved_orders[approved_orders['job_order_no'] == selected_order_no].iloc[0]
@@ -4355,9 +4472,9 @@ elif app_mode == "Search Results":
             _gs_res = (
                 supabase.table('job_orders')
                 .select("*")
-                .or_(f"job_order_no.ilike.%{_gsq}%,customer_name.ilike.%{_gsq}%")
+                .or_(f"job_order_no.ilike.%{_gsq}%,customer_name.ilike.%{_gsq}%,item_description.ilike.%{_gsq}%")
                 .order('created_at', desc=True)
-                .limit(50)
+                .limit(100)
                 .execute()
             )
             if _gs_res.data:
@@ -4368,6 +4485,8 @@ elif app_mode == "Search Results":
             st.warning(f"No orders found matching **{_gsq}**.")
         else:
             st.markdown(f"**{len(_gs_df)} order(s) found.**")
+            if len(_gs_df) >= 100:
+                st.caption("Showing the top 100 matches, most recent first. Narrow your search (e.g. add more of the order number or customer name) to see others.")
             _GS_SC = {
                 'Approved':'#10b981', 'Rejected':'#ef4444',
                 'Pending Approval':'#f59e0b', 'Pending Revision Approval':'#f59e0b',
@@ -4415,9 +4534,21 @@ elif app_mode == "Production Layout Builder" and is_admin:
     if approved_pipeline_df.empty:
         st.info("No approved orders available for production scheduling. Authorize orders in the Authorization Center first.")
     else:
+        # Labeled options, not bare order numbers — Streamlit's selectbox
+        # filters against the displayed (formatted) string as you type, so
+        # this also makes the dropdown searchable by customer name, not
+        # just by an order number nobody has memorized.
+        approved_pipeline_df = approved_pipeline_df.copy()
+        approved_pipeline_df['_plb_label'] = approved_pipeline_df.apply(
+            lambda r: f"{r.get('job_order_no','—')} — {r.get('customer_name','—')} "
+                      f"({CURRENCY} {float(r.get('total_amount', 0) or 0):,.0f})",
+            axis=1
+        )
+        _plb_label_map = dict(zip(approved_pipeline_df['job_order_no'], approved_pipeline_df['_plb_label']))
         select_for_layout = st.selectbox(
             "Select Approved Order to Schedule:",
-            [""] + approved_pipeline_df['job_order_no'].dropna().tolist()
+            [""] + approved_pipeline_df['job_order_no'].dropna().tolist(),
+            format_func=lambda o: _plb_label_map.get(o, "—") if o else "— Select an order —",
         )
         if select_for_layout:
             _plb_row = approved_pipeline_df[approved_pipeline_df['job_order_no'] == select_for_layout].iloc[0]
