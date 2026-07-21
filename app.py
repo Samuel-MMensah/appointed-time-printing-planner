@@ -226,10 +226,17 @@ def _approval_recipients():
 
 
 def _collection_alert_recipients():
-    return list(filter(None, [
+    """
+    Comma-separated per slot, same convention as _approval_recipients —
+    NOTIFY_EMAIL_1 and NOTIFY_EMAIL_2 each split into as many addresses as
+    listed, rather than being treated as exactly two single addresses.
+    """
+    raw = ",".join(filter(None, [
         st.secrets.get("NOTIFY_EMAIL_1", ""),
         st.secrets.get("NOTIFY_EMAIL_2", ""),
-    ])) or ["md@appointedtime.com.gh"]
+    ]))
+    emails = [e.strip() for e in raw.split(",") if e.strip()]
+    return emails or ["md@appointedtime.com.gh"]
 
 
 def send_resend_notification(payload):
