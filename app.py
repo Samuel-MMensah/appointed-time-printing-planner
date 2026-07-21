@@ -217,12 +217,13 @@ def _approval_recipients():
     """
     Recipients for new-order-submitted alerts, configurable via the
     APPROVAL_NOTIFY_EMAILS secret (comma-separated) so a staffing change is
-    a secrets update, not a code deploy. Falls back to the original
-    hardcoded pair so behavior is unchanged until that secret is set.
+    a secrets update, not a code deploy. Falls back to MD/FM's real
+    addresses (not a placeholder) if that secret is ever unset, so a
+    dropped secret still lands somewhere real instead of a dead inbox.
     """
     raw = st.secrets.get("APPROVAL_NOTIFY_EMAILS", "")
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["md@appointedtime.com.gh", "s.mensah@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh"]
 
 
 def _collection_alert_recipients():
@@ -230,13 +231,14 @@ def _collection_alert_recipients():
     Comma-separated per slot, same convention as _approval_recipients —
     NOTIFY_EMAIL_1 and NOTIFY_EMAIL_2 each split into as many addresses as
     listed, rather than being treated as exactly two single addresses.
+    Falls back to MD/FM's real addresses if both secrets are ever unset.
     """
     raw = ",".join(filter(None, [
         st.secrets.get("NOTIFY_EMAIL_1", ""),
         st.secrets.get("NOTIFY_EMAIL_2", ""),
     ]))
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["md@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh"]
 
 
 def send_resend_notification(payload):
@@ -344,8 +346,10 @@ def notify_needs_scheduling(order_data: dict) -> None:
 
 
 def _warehouse_recipients():
+    """Falls back to the real warehouse address, not a placeholder, if
+    WAREHOUSE_NOTIFY_EMAILS is ever unset."""
     raw = st.secrets.get("WAREHOUSE_NOTIFY_EMAILS", "")
-    return [e.strip() for e in raw.split(",") if e.strip()] or ["md@appointedtime.com.gh"]
+    return [e.strip() for e in raw.split(",") if e.strip()] or ["appointedtime.supplychain@gmail.com"]
 
 
 def notify_sent_to_warehouse(order_data: dict) -> None:
@@ -371,8 +375,10 @@ def notify_sent_to_warehouse(order_data: dict) -> None:
 
 
 def _finance_recipients():
+    """Falls back to the real finance address, not a placeholder, if
+    FINANCE_NOTIFY_EMAILS is ever unset."""
     raw = st.secrets.get("FINANCE_NOTIFY_EMAILS", "")
-    return [e.strip() for e in raw.split(",") if e.strip()] or ["md@appointedtime.com.gh"]
+    return [e.strip() for e in raw.split(",") if e.strip()] or ["celestina.foli@appointedtime.com.gh"]
 
 
 def notify_ready_for_finance(order_data: dict) -> bool:
