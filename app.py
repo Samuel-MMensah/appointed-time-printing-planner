@@ -4116,6 +4116,7 @@ elif app_mode == "Authorization Center" and is_admin:
                                         _n_row['approval_date'] = locals().get('_approval_ts', '')
                                         notify_order_approved(_n_row)
                                         notify_needs_scheduling(_n_row)
+                                        send_departmental_alert(_n_row)
                                     except Exception:
                                         logger.exception(
                                             "notify_order_approved lookup/send failed for order id=%s.",
