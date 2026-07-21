@@ -1948,9 +1948,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
     # 1. Define Module Access via RBAC
-    ops_modules = ["Command Center", "Shop Floor Control"]
-    if rbac.check_access(['Admin', 'Production_Press', 'Production_Garment']):
-        ops_modules.append("Production Board")
+    ops_modules = ["Command Center", "Shop Floor Control", "Production Board"]
     if rbac.check_access(['Admin']):
         ops_modules.insert(1, "Production Layout Builder")
 

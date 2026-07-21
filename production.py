@@ -23,9 +23,15 @@ def render_production_board(
     user_department: str = "NONE"
 ) -> None:
     
-    # Permission Logic
-    allowed_roles = rbac.ADMIN_ROLES
-    if not rbac.check_access(allowed_roles) and user_department not in ["PRESS", "GARMENT"]:
+    # Permission logic: same posture as Command Center and Shop Floor
+    # Control — both already show contract value, quantity, and customer
+    # name to any logged-in user with no role gate. Production Board isn't
+    # more sensitive than either of those, so it follows the same rule
+    # rather than a stricter one-off. department no longer decides WHETHER
+    # you get in, only whether the department toggle is locked (floor
+    # staff assigned to one department) or free (everyone else, including
+    # Front Desk and MD/FM, who should see both).
+    if not st.session_state.get("authenticated"):
         st.markdown('<div style="text-align:center;padding:3rem;">Restricted Access</div>', unsafe_allow_html=True)
         return
 
