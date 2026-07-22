@@ -1949,7 +1949,7 @@ with st.sidebar:
     )
     # 1. Define Module Access via RBAC
     ops_modules = ["Command Center", "Shop Floor Control", "Production Board"]
-    if rbac.check_access(['Admin']):
+    if is_admin:
         ops_modules.insert(1, "Production Layout Builder")
 
     admin_modules = ["Raise Job Order", "My Order Tracker"]
@@ -1957,7 +1957,7 @@ with st.sidebar:
         admin_modules.append("Warehouse")
     if rbac.check_access(rbac.ADMIN_ROLES | rbac.FINANCE_ROLES):
         admin_modules.append("Dispatch")
-    if rbac.check_access(['Admin']):
+    if is_admin:
         admin_modules += ["Authorization Center", "Approved Orders Archive"]
     
     # ── Auth Centre pending-count badge (zero extra DB calls — uses TTL cache) ──
@@ -4479,12 +4479,18 @@ elif app_mode == "Search Results":
     if not _gsq:
         st.info("Enter a search term in the sidebar search bar.")
     else:
+        # PostgREST's .or_() takes a raw filter string, where comma and
+        # parentheses are syntax, not literal characters — a search term
+        # containing them would otherwise let a user reshape the filter's
+        # logic (extra OR branches, malformed queries) rather than just
+        # searching. Strip anything that isn't safe inside an ilike value.
+        _gsq_safe = re.sub(r'[,()%]', ' ', _gsq).strip()
         _gs_df = pd.DataFrame()
         try:
             _gs_res = (
                 supabase.table('job_orders')
                 .select("*")
-                .or_(f"job_order_no.ilike.%{_gsq}%,customer_name.ilike.%{_gsq}%,item_description.ilike.%{_gsq}%")
+                .or_(f"job_order_no.ilike.%{_gsq_safe}%,customer_name.ilike.%{_gsq_safe}%,item_description.ilike.%{_gsq_safe}%")
                 .order('created_at', desc=True)
                 .limit(100)
                 .execute()
