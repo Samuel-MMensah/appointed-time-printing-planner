@@ -2066,32 +2066,6 @@ if app_mode != "Raise Job Order" and st.session_state.get("resubmit_order_data")
 # ROUTE 1: COMMAND CENTER  (dept-aware)
 # ═══════════════════════════════════════════════════════════════════
 if app_mode == "Command Center":
-    # ── TEMPORARY DIAGNOSTIC — remove once the Resend secrets issue is
-    # resolved. Shows ground truth from the live process instead of
-    # inferring from log lines, which turned out to be misleading (the
-    # approval-recipients fallback happens to match the real secret
-    # value, so it "looked" fine either way). Admin-only, masked values.
-    if rbac.is_admin():
-        with st.expander("🔧 Secrets Diagnostic (temporary)", expanded=True):
-            def _mask(v):
-                v = str(v) if v else ""
-                if not v:
-                    return "(empty)"
-                return v[:4] + "..." + v[-4:] if len(v) > 10 else v[:2] + "..."
-            _diag_keys = [
-                "RESEND_API_KEY", "RESEND_SENDER_EMAIL", "APPROVAL_NOTIFY_EMAILS",
-                "APP_URL", "SCHEDULER_NOTIFY_EMAILS",
-            ]
-            for _dk in _diag_keys:
-                _dv = st.secrets.get(_dk, None)
-                st.write(f"**{_dk}**: present={_dv is not None and _dv != ''} → `{_mask(_dv)}`")
-            _sb = st.secrets.get("supabase", {})
-            st.write(f"**[supabase] url**: present={bool(_sb.get('url'))} → `{_mask(_sb.get('url'))}`")
-            try:
-                st.write(f"**st.secrets top-level keys seen**: {list(st.secrets.keys())}")
-            except Exception as _dke:
-                st.write(f"Could not list secrets keys: {_dke}")
-
     df = get_db_jobs()
     # ── Cached fetch — 60 s TTL, no full-table scan on every rerun ──────
     approved_orders_df = (
