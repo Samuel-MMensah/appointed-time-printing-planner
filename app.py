@@ -232,7 +232,7 @@ def _approval_recipients():
     """
     raw = st.secrets.get("APPROVAL_NOTIFY_EMAILS", "")
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametefe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
 
 
 def _scheduler_recipients():
@@ -259,7 +259,7 @@ def _collection_alert_recipients():
         st.secrets.get("NOTIFY_EMAIL_2", ""),
     ]))
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametefe@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh"]
 
 
 def send_resend_notification(payload):
@@ -2576,6 +2576,9 @@ elif app_mode == "Raise Job Order":
                                                 step=100.0, value=_rdf("deposit_amount"))
                 rg_b_due  = _rgf3.date_input("Balance Deadline ★", value=_rdd("balance_due_date"))
                 rg_c_date = _rgf4.date_input("Collection Date ★",  value=_rdd("date_of_collection"))
+                rg_receipt_no = st.text_input(
+                    "Receipt Number (required if a deposit is entered)",
+                    value=_rd("receipt_no"), placeholder="e.g. RCT-00123")
  
                 # ── Quantity & Material Source ───────────────────────────
                 st.markdown('<div class="form-group-header">Production Quantity & Sourcing</div>',
@@ -2674,6 +2677,8 @@ elif app_mode == "Raise Job Order":
                     if rg_qty <= 0:              _rg_missing.append("Quantity to Print")
                     if not rg_print_type:        _rg_missing.append("Print Type")
                     if not rg_mat_source:        _rg_missing.append("Material Source")
+                    if rg_d_amt > 0 and not rg_receipt_no.strip():
+                        _rg_missing.append("Receipt Number (required since a deposit was entered)")
  
                     if not _rg_missing:
                         _rg_orig_pgid = resubmit_data.get("parent_group_id", None)
@@ -2696,6 +2701,7 @@ elif app_mode == "Raise Job Order":
                             "job_description":      sanitize_string(rg_j_desc),
                             "total_amount":         float(rg_t_amt),
                             "deposit_amount":       float(rg_d_amt),
+                            "receipt_no":           sanitize_string(rg_receipt_no) if rg_d_amt > 0 else None,
                             "balance_due_date":     rg_b_due.isoformat(),
                             "date_of_collection":   rg_c_date.isoformat(),
                             "qty_to_print":         int(rg_qty),
@@ -2817,6 +2823,9 @@ elif app_mode == "Raise Job Order":
                                                     step=100.0, value=_rdf("deposit_amount"))
                     rp_b_due  = _rpf3.date_input("Balance Deadline ★", value=_rdd("balance_due_date"))
                     rp_c_date = _rpf4.date_input("Collection Date ★",  value=_rdd("date_of_collection"))
+                    rp_receipt_no = st.text_input(
+                        "Receipt Number (required if a deposit is entered)",
+                        value=_rd("receipt_no"), placeholder="e.g. RCT-00123")
 
                     st.markdown('<div class="form-group-header">Production Quantity & Category</div>',
                                 unsafe_allow_html=True)
@@ -2871,6 +2880,8 @@ elif app_mode == "Raise Job Order":
                         if rp_t_amt <= 0.0:        _rp_missing.append("Total Item Amount")
                         if rp_qty <= 0:            _rp_missing.append("Quantity")
                         if not rp_type_print:      _rp_missing.append("Print Category")
+                        if rp_d_amt > 0 and not rp_receipt_no.strip():
+                            _rp_missing.append("Receipt Number (required since a deposit was entered)")
 
                         if not _rp_missing:
                             _rp_orig_pgid = resubmit_data.get("parent_group_id", None)
@@ -2880,6 +2891,7 @@ elif app_mode == "Raise Job Order":
                                 "job_description":     sanitize_string(rp_j_desc),
                                 "total_amount":        float(rp_t_amt),
                                 "deposit_amount":      float(rp_d_amt),
+                                "receipt_no":          sanitize_string(rp_receipt_no) if rp_d_amt > 0 else None,
                                 "balance_due_date":    rp_b_due.isoformat(),
                                 "date_of_collection":  rp_c_date.isoformat(),
                                 "qty_to_print":        int(rp_qty),
@@ -3058,6 +3070,9 @@ elif app_mode == "Raise Job Order":
                 item_d_amt  = _if2.number_input("Deposit Paid (GHS)",         min_value=0.0, step=100.0)
                 item_b_due  = _if3.date_input("Balance Deadline ★")
                 item_c_date = _if4.date_input("Collection Date ★")
+                item_receipt_no = st.text_input(
+                    "Receipt Number (required if a deposit is entered)",
+                    placeholder="e.g. RCT-00123")
                 _is1, _is2, _is3, _is4 = st.columns(4)
                 item_qty        = _is1.number_input("Quantity ★", min_value=0, step=500)
                 _ipc_opts       = ["", "OFFSET", "DIGITAL PRESS", "PACKAGING"]
@@ -3091,6 +3106,8 @@ elif app_mode == "Raise Job Order":
                     if item_t_amt <= 0.0:        _item_missing.append("Total Item Amount")
                     if item_qty <= 0:            _item_missing.append("Quantity")
                     if not item_type_print:      _item_missing.append("Print Category")
+                    if item_d_amt > 0 and not item_receipt_no.strip():
+                        _item_missing.append("Receipt Number (required since a deposit was entered)")
                     if not _item_missing:
                         st.session_state.cart_client_name  = item_c_name.strip()
                         st.session_state.cart_client_phone = item_c_phone.strip()
@@ -3099,6 +3116,7 @@ elif app_mode == "Raise Job Order":
                             "job_description":     sanitize_string(item_desc),
                             "total_amount":        float(item_t_amt),
                             "deposit_amount":      float(item_d_amt),
+                            "receipt_no":          sanitize_string(item_receipt_no) if item_d_amt > 0 else None,
                             "balance_due_date":    item_b_due.isoformat(),
                             "date_of_collection":  item_c_date.isoformat(),
                             "qty_to_print":        int(item_qty),
@@ -3291,6 +3309,9 @@ elif app_mode == "Raise Job Order":
                 g_d_amt  = _gf2.number_input("Deposit Paid (GHS)",          min_value=0.0, step=100.0)
                 g_b_due  = _gf3.date_input("Balance Deadline ★")
                 g_c_date = _gf4.date_input("Collection Date ★")
+                g_receipt_no = st.text_input(
+                    "Receipt Number (required if a deposit is entered)",
+                    placeholder="e.g. RCT-00123")
                 _gq1, _gq2 = st.columns(2)
                 g_qty        = _gq1.number_input("Quantity to Print ★", min_value=0, step=10)
                 g_mat_source = _gq2.selectbox("Material Source ★", ["", "Company Material", "Customer Material"])
@@ -3331,6 +3352,8 @@ elif app_mode == "Raise Job Order":
                     if g_qty <= 0:            _g_missing.append("Quantity")
                     if not g_print_type:      _g_missing.append("Print Type")
                     if not g_mat_source:      _g_missing.append("Material Source")
+                    if g_d_amt > 0 and not g_receipt_no.strip():
+                        _g_missing.append("Receipt Number (required since a deposit was entered)")
                     if not _g_missing:
                         st.session_state.garment_cart_client_name  = g_c_name.strip()
                         st.session_state.garment_cart_client_phone = g_c_phone.strip()
@@ -3345,6 +3368,7 @@ elif app_mode == "Raise Job Order":
                             "job_description":          sanitize_string(g_desc),
                             "total_amount":             float(g_t_amt),
                             "deposit_amount":           float(g_d_amt),
+                            "receipt_no":               sanitize_string(g_receipt_no) if g_d_amt > 0 else None,
                             "balance_due_date":         g_b_due.isoformat(),
                             "date_of_collection":       g_c_date.isoformat(),
                             "qty_to_print":             int(g_qty),
