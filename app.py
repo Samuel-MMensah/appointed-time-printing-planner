@@ -872,24 +872,25 @@ def get_archive_orders_cached() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def record_balance_payment(order_id: str, new_deposit: float) -> bool:
+def record_balance_payment(order_id: str, new_deposit: float, receipt_no: str = None) -> bool:
     """
     Record a balance or partial payment by updating deposit_amount.
-    Also writes last_payment_date if the column exists.
+    Also writes last_payment_date and, if provided, receipt_no.
     Clears both approved and archive caches on success.
     """
     if not supabase:
         return False
     try:
         _ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        _update = {"deposit_amount": round(new_deposit, 2), "last_payment_date": _ts}
+        if receipt_no:
+            _update["receipt_no"] = receipt_no.strip()
         try:
-            supabase.table('job_orders').update(
-                {"deposit_amount": round(new_deposit, 2), "last_payment_date": _ts}
-            ).eq('id', order_id).execute()
+            supabase.table('job_orders').update(_update).eq('id', order_id).execute()
         except Exception:
             logger.warning(
-                "record_balance_payment: last_payment_date write failed for "
-                "order_id=%s, retrying without it.", order_id
+                "record_balance_payment: full write failed for "
+                "order_id=%s, retrying with deposit_amount only.", order_id
             )
             supabase.table('job_orders').update(
                 {"deposit_amount": round(new_deposit, 2)}
@@ -1345,17 +1346,24 @@ def generate_pdf_manifest(ticket):
     total   = float(ticket.get('total_amount',  0) or 0)
     deposit = float(ticket.get('deposit_amount', 0) or 0)
     balance = total - deposit
+    # order_date falls back to created_at's date portion — orders raised
+    # before the insert-ordering fix have no order_date stored at all,
+    # so this keeps existing/already-approved orders displaying
+    # correctly too, not just new ones going forward.
+    _pdf_order_date = str(ticket.get('order_date', '') or '').strip()
+    if not _pdf_order_date:
+        _pdf_order_date = str(ticket.get('created_at', '') or '')[:10]
     cust_data = [
         [Paragraph("Customer Name", small_grey), Paragraph("Telephone Number", small_grey),
          Paragraph("Job Order Date", small_grey), Paragraph("Date of Collection", small_grey)],
         [Paragraph(str(ticket.get('customer_name',     '') or ''), bold_style),
          Paragraph(str(ticket.get('telephone_number',  '') or ''), bold_style),
-         Paragraph(str(ticket.get('order_date',        '') or ''), bold_style),
+         Paragraph(_pdf_order_date, bold_style),
          Paragraph(str(ticket.get('date_of_collection','') or ''), bold_style)],
         [Paragraph("Total Amount GHC", small_grey), Paragraph("Deposit GHC", small_grey),
          Paragraph("Balance GHC", small_grey),      Paragraph("Receipt No", small_grey)],
         [Paragraph(f"{total:,.2f}", bold_style), Paragraph(f"{deposit:,.2f}", bold_style),
-         Paragraph(f"{balance:,.2f}", bold_style), Paragraph("", bold_style)]
+         Paragraph(f"{balance:,.2f}", bold_style), Paragraph(str(ticket.get('receipt_no', '') or ''), bold_style)]
     ]
     t_cust = Table(cust_data, colWidths=[2.2*inch, 1.6*inch, 1.6*inch, 1.6*inch])
     t_cust.setStyle(TableStyle([
@@ -1421,11 +1429,20 @@ def generate_pdf_manifest(ticket):
     bind_type = str(ticket.get('binding_type',   '') or '')
     lam_type  = str(ticket.get('laminating_type','') or '')
     del_mode  = str(ticket.get('delivery_mode',  '') or '')
+    # Field name varies by submission path (Press vs Garment, single vs
+    # batch) -- check every real name quantity is ever stored under.
+    _pdf_qty = (
+        ticket.get('qty_to_print') or ticket.get('print_qty')
+        or ticket.get('qty_to_pack') or ticket.get('quantity') or '-'
+    )
     finishing_data = [
-        [Paragraph("IMPRESSION", bold_style),
-         Paragraph(str(ticket.get('impressions_colour', '-') or '-'), normal_style),
-         Paragraph("DELIVERY MODE", bold_style),
-         Paragraph(f"{cb(del_mode,'COMPANY DELIVERY')} COMPANY DELIVERY   {cb(del_mode,'CLIENT PICKUP')} CUSTOMER PICK-UP", normal_style)],
+        [Paragraph("QUANTITY", bold_style),
+         Paragraph(str(_pdf_qty), normal_style),
+         Paragraph("IMPRESSION", bold_style),
+         Paragraph(str(ticket.get('impressions_colour', '-') or '-'), normal_style)],
+        [Paragraph("DELIVERY MODE", bold_style),
+         Paragraph(f"{cb(del_mode,'COMPANY DELIVERY')} COMPANY DELIVERY   {cb(del_mode,'CLIENT PICKUP')} CUSTOMER PICK-UP", normal_style),
+         Paragraph("", normal_style), Paragraph("", normal_style)],
         [Paragraph("BINDING", bold_style),
          Paragraph(f"{cb(bind_type,'Perfect Binding')} Perfect Binding<br/>"
                    f"{cb(bind_type,'Spiral Binding')} Spiral Binding<br/>"
@@ -1450,7 +1467,7 @@ def generate_pdf_manifest(ticket):
     # ── Pull live approval fields from the ticket ────────────────────────
     _fp_prep_by   = str(ticket.get('created_by',    '') or '').strip()
     _fp_auth_by   = str(ticket.get('approved_by',   '') or '').strip()
-    _fp_ord_date  = str(ticket.get('order_date',    '') or '').strip()
+    _fp_ord_date  = _pdf_order_date
     _fp_appr_raw  = str(ticket.get('approval_date', '') or ticket.get('updated_at', '') or '').strip()
 
     # Format approval timestamp → "12 Jun 2025  14:35 UTC"
@@ -1613,7 +1630,7 @@ def generate_garment_pdf_manifest(ticket):
          Paragraph(f"{deposit:,.2f}",      bold_s), Paragraph("", norm_s)],
         [Paragraph("Order Date",         small_s), Paragraph("", small_s),
          Paragraph("Balance GH₵",         small_s), Paragraph("", small_s)],
-        [Paragraph(safe(ticket.get('order_date')), bold_s), Paragraph("", norm_s),
+        [Paragraph(safe(ticket.get('order_date') or str(ticket.get('created_at','') or '')[:10]), bold_s), Paragraph("", norm_s),
          Paragraph(f"{balance:,.2f}",      bold_s), Paragraph("", norm_s)],
         [Paragraph("Date of Collection", small_s), Paragraph("Qty. to Print", small_s),
          Paragraph("Balance Due Date",    small_s), Paragraph("", small_s)],
@@ -1822,7 +1839,7 @@ def generate_garment_pdf_manifest(ticket):
     # ── SIGNATURE FOOTER ──────────────────────────────────────────────
     _gf_prep_by  = safe(ticket.get('created_by'),    '')
     _gf_auth_by  = safe(ticket.get('approved_by'),   '')
-    _gf_ord_date = safe(ticket.get('order_date'),    '')
+    _gf_ord_date = safe(ticket.get('order_date') or str(ticket.get('created_at','') or '')[:10], '')
     _gf_appr_raw = safe(ticket.get('approval_date', '') or ticket.get('updated_at', ''), '')
 
     def _gf_fmt_ts(raw: str) -> str:
@@ -2709,6 +2726,7 @@ elif app_mode == "Raise Job Order":
                             "department":  "GARMENT",
                             "status":      "Pending Approval",
                             "created_by":  st.session_state.user_email,
+                            "order_date":  datetime.now().strftime("%Y-%m-%d"),
                         }
  
                         if _rg_orig_pgid:
@@ -2721,7 +2739,6 @@ elif app_mode == "Raise Job Order":
                                 if _rg_res.data else f"AT-{random.randint(10000,99999)}"
                             )
                             rg_payload["job_order_no"] = _rg_gen_no
-                            rg_payload["order_date"]   = datetime.now().strftime("%Y-%m-%d")
  
                             st.session_state.last_raised_order        = rg_payload
                             st.session_state.last_raised_batch        = []
@@ -2884,6 +2901,7 @@ elif app_mode == "Raise Job Order":
                                 "department":  "PRESS",
                                 "status":      "Pending Approval",
                                 "created_by":  st.session_state.user_email,
+                                "order_date":  datetime.now().strftime("%Y-%m-%d"),
                             }
                             if _rp_orig_pgid:
                                 rp_payload["parent_group_id"] = _rp_orig_pgid
@@ -2895,7 +2913,6 @@ elif app_mode == "Raise Job Order":
                                     if _rp_res.data else f"AT-{random.randint(10000,99999)}"
                                 )
                                 rp_payload["job_order_no"] = _rp_gen_no
-                                rp_payload["order_date"]   = datetime.now().strftime("%Y-%m-%d")
 
                                 st.session_state.last_raised_order         = rp_payload
                                 st.session_state.last_raised_batch         = []
@@ -3169,6 +3186,7 @@ elif app_mode == "Raise Job Order":
                                     "parent_group_id":  _pgid,
                                     "status":           "Pending Approval",
                                     "created_by":       st.session_state.user_email,
+                                    "order_date":       datetime.now().strftime('%Y-%m-%d'),
                                     **_b_item
                                 }
                                 try:
@@ -3178,7 +3196,6 @@ elif app_mode == "Raise Job Order":
                                         if _res.data else f"AT-{random.randint(10000,99999)}"
                                     )
                                     _payload["job_order_no"] = _gen_no
-                                    _payload["order_date"]   = datetime.now().strftime('%Y-%m-%d')
                                     _submitted.append(_payload)
                                 except Exception as _be:
                                     st.error(f"Failed to insert item: {str(_be)}")
@@ -3422,6 +3439,7 @@ elif app_mode == "Raise Job Order":
                                     "parent_group_id":  _g_pgid,
                                     "status":           "Pending Approval",
                                     "created_by":       st.session_state.user_email,
+                                    "order_date":       datetime.now().strftime('%Y-%m-%d'),
                                     **_gb_item
                                 }
                                 # material_description_rows is Python-only; remove before Supabase insert
@@ -3433,7 +3451,6 @@ elif app_mode == "Raise Job Order":
                                         if _g_res.data else f"GT-{random.randint(10000,99999)}"
                                     )
                                     _g_payload["job_order_no"]              = _g_gen_no
-                                    _g_payload["order_date"]                = datetime.now().strftime('%Y-%m-%d')
                                     _g_payload["material_description_rows"] = _rows_for_pdf
                                     _g_submitted.append(_g_payload)
                                 except Exception as _gbe:
@@ -4347,31 +4364,33 @@ elif app_mode == "Approved Orders Archive" and is_admin:
                     st.markdown("<hr style='margin:1rem 0;border-top:1px solid #e2e8f0;'>",
                                 unsafe_allow_html=True)
                     st.markdown("**💰 Record Balance Payment**")
-                    _bp1, _bp2, _bp3 = st.columns([2, 2, 1])
+                    st.markdown(
+                        f'<div style="font-size:0.8rem;color:#64748b;">Outstanding Balance</div>'
+                        f'<div style="font-size:1.25rem;font-weight:800;color:#ef4444;">'
+                        f'{CURRENCY}{_tr_balance:,.2f}</div>',
+                        unsafe_allow_html=True)
+                    _bp1, _bp2 = st.columns([1, 1])
                     with _bp1:
-                        st.markdown(
-                            f'<div style="font-size:0.8rem;color:#64748b;">Outstanding Balance</div>'
-                            f'<div style="font-size:1.25rem;font-weight:800;color:#ef4444;">'
-                            f'{CURRENCY}{_tr_balance:,.2f}</div>',
-                            unsafe_allow_html=True)
-                    with _bp2:
                         _pay_amt = st.number_input(
                             "Payment Amount",
                             min_value=0.01, max_value=float(_tr_balance),
                             value=float(_tr_balance), step=100.0,
-                            key=f"pay_amt_{selected_order_no}",
-                            label_visibility="collapsed")
-                    with _bp3:
-                        if st.button("✓ Record", key=f"pay_btn_{selected_order_no}",
-                                     use_container_width=True, type="primary"):
-                            _new_dep = _tr_deposit + _pay_amt
-                            if record_balance_payment(str(target_row['id']), _new_dep):
-                                st.success(
-                                    f"Payment of {CURRENCY}{_pay_amt:,.2f} recorded. "
-                                    f"New deposit total: {CURRENCY}{_new_dep:,.2f}")
-                                st.rerun()
-                            else:
-                                st.error("Payment recording failed.")
+                            key=f"pay_amt_{selected_order_no}")
+                    with _bp2:
+                        _pay_receipt_no = st.text_input(
+                            "Receipt Number",
+                            key=f"pay_receipt_{selected_order_no}",
+                            placeholder="e.g. RCT-00123 — optional, recommended for the audit trail")
+                    if st.button("✓ Record Payment", key=f"pay_btn_{selected_order_no}",
+                                 use_container_width=True, type="primary"):
+                        _new_dep = _tr_deposit + _pay_amt
+                        if record_balance_payment(str(target_row['id']), _new_dep, _pay_receipt_no):
+                            st.success(
+                                f"Payment of {CURRENCY}{_pay_amt:,.2f} recorded. "
+                                f"New deposit total: {CURRENCY}{_new_dep:,.2f}")
+                            st.rerun()
+                        else:
+                            st.error("Payment recording failed.")
                 elif _tr_total > 0:
                     st.markdown(
                         f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;'

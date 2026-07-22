@@ -110,22 +110,26 @@ def render_dispatch_module(
             )
 
             if balance > 0:
-                pay_col1, pay_col2 = st.columns([3, 1])
+                pay_col1, pay_col2 = st.columns([2, 2])
                 with pay_col1:
                     pay_amt = st.number_input(
                         "Payment amount", min_value=0.01, max_value=float(balance),
                         value=float(balance), step=50.0,
-                        key=f"disp_pay_amt_{row_id}", label_visibility="collapsed",
+                        key=f"disp_pay_amt_{row_id}",
                     )
                 with pay_col2:
-                    if st.button("Record Payment", key=f"disp_pay_btn_{row_id}", use_container_width=True):
-                        new_deposit_total = deposit + pay_amt  # cumulative — see module docstring
-                        if record_balance_payment(row_id, new_deposit_total):
-                            st.success(f"Payment of {currency} {pay_amt:,.2f} recorded for {order_no}.")
-                            st.rerun()
-                        else:
-                            logger.error("record_balance_payment failed for order id=%s.", row_id)
-                            st.error("Payment recording failed. Check logs for details.")
+                    pay_receipt_no = st.text_input(
+                        "Receipt number", key=f"disp_pay_receipt_{row_id}",
+                        placeholder="e.g. RCT-00123 — optional, recommended for the audit trail",
+                    )
+                if st.button("Record Payment", key=f"disp_pay_btn_{row_id}", use_container_width=True):
+                    new_deposit_total = deposit + pay_amt  # cumulative — see module docstring
+                    if record_balance_payment(row_id, new_deposit_total, pay_receipt_no):
+                        st.success(f"Payment of {currency} {pay_amt:,.2f} recorded for {order_no}.")
+                        st.rerun()
+                    else:
+                        logger.error("record_balance_payment failed for order id=%s.", row_id)
+                        st.error("Payment recording failed. Check logs for details.")
 
                 # Professional CSS warning block — replaces an emoji-based alert.
                 st.markdown(
