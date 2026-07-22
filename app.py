@@ -232,7 +232,7 @@ def _approval_recipients():
     """
     raw = st.secrets.get("APPROVAL_NOTIFY_EMAILS", "")
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametefe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
 
 
 def _scheduler_recipients():
@@ -259,7 +259,7 @@ def _collection_alert_recipients():
         st.secrets.get("NOTIFY_EMAIL_2", ""),
     ]))
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametefe@appointedtime.com.gh"]
 
 
 def send_resend_notification(payload):
