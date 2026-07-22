@@ -9,4 +9,4 @@
 # regardless of which one actually happened.
 
 [secrets]
-files = [".streamlit/secrets.toml", "/etc/secrets/secrets.toml"]
+files = ["/etc/secrets/secrets.toml"]
