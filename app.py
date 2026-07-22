@@ -165,15 +165,24 @@ def _send_resend_email(api_key, sender_email, recipients, subject, html_body, lo
     """
     def worker():
         if not api_key or not recipients:
+            logger.warning(
+                "Resend email skipped (%s): api_key set=%s, recipients=%r",
+                log_context, bool(api_key), recipients,
+            )
             return
         try:
-            requests.post(
+            _resp = requests.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"from": f"Appointed Time Hub <{sender_email}>",
                       "to": recipients, "subject": subject, "html": html_body},
                 timeout=10,
             )
+            if _resp.status_code >= 400:
+                logger.error(
+                    "Resend rejected email (%s): status=%s body=%s subject=%r",
+                    log_context, _resp.status_code, _resp.text[:500], subject,
+                )
         except Exception:
             logger.exception("Resend email failed (%s): subject=%r", log_context, subject)
     threading.Thread(target=worker, daemon=True).start()
