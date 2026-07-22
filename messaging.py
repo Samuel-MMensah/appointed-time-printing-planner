@@ -141,11 +141,27 @@ def send_departmental_alert(order_data: dict) -> bool:
         return False
 
     order_no = str(order_data.get("job_order_no", "—"))
+    _dept_upper = department.strip().upper()
+    if _dept_upper == "GARMENT":
+        _intro = (
+            "An order assigned to your department has been approved. Garment orders are "
+            "not scheduled in Production Layout Builder — <strong>you can begin production "
+            "immediately</strong>, no need to wait on the scheduler."
+        )
+    elif _dept_upper == "PRESS":
+        _intro = (
+            "An order assigned to your department has been approved and sent to the "
+            "scheduler for machine/stage scheduling. <strong>Wait for the schedule before "
+            "starting production</strong> — unless this is a low-quantity job that your team "
+            "has agreed doesn't need scheduling, in which case you can begin immediately."
+        )
+    else:
+        _intro = "An order assigned to your department requires attention."
     html = _alert_shell(
         accent_bg="#0f172a",
         heading=f"{department.upper()} DEPARTMENT ALERT",
         subheading="Appointed Time Printing Enterprise Hub",
-        intro="An order assigned to your department requires attention.",
+        intro=_intro,
         rows=[
             ("Order No", order_no),
             ("Customer", str(order_data.get("customer_name", "—"))),

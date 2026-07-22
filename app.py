@@ -223,7 +223,19 @@ def _approval_recipients():
     """
     raw = st.secrets.get("APPROVAL_NOTIFY_EMAILS", "")
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
+
+
+def _scheduler_recipients():
+    """
+    The Planner/scheduler is a distinct role from MD/FM approval —
+    separate secret so it can be reassigned to a different person without
+    touching who approves orders. Falls back to the real current
+    scheduler's address, not a placeholder.
+    """
+    raw = st.secrets.get("SCHEDULER_NOTIFY_EMAILS", "")
+    emails = [e.strip() for e in raw.split(",") if e.strip()]
+    return emails or ["s.mensah@appointedtime.com.gh"]
 
 
 def _collection_alert_recipients():
@@ -250,7 +262,7 @@ def send_resend_notification(payload):
         accent_bg="#0f172a",
         heading="EXECUTIVE APPROVAL REQUIRED",
         subheading=f"Appointed Time Printing Enterprise Hub &mdash; {dept_label} DEPT",
-        intro="A new commercial print asset requires authorization sign-off.",
+        intro="A new order requires authorization sign-off.",
         rows=[
             ("Job Order No:",   str(payload.get('job_order_no', 'PENDING')), "#0369a1"),
             ("Customer:",       str(payload.get('customer_name', '—')),      None),
@@ -321,8 +333,9 @@ def notify_order_rejected(order_data: dict) -> None:
 
 
 def notify_needs_scheduling(order_data: dict) -> None:
-    """Reuses the approval recipient list on purpose — scheduling is
-    staying admin-only, same people who already get the approval alert."""
+    """Goes to the actual scheduler (s.mensah), not the MD/FM approval
+    list — scheduling and approval are different people doing different
+    jobs, even though both alerts fire off the same approval event."""
     d = order_data
     api_key      = st.secrets.get("RESEND_API_KEY", "")
     sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
@@ -339,7 +352,7 @@ def notify_needs_scheduling(order_data: dict) -> None:
         footer="Schedule it in Production Layout Builder.",
     )
     _send_resend_email(
-        api_key, sender_email, _approval_recipients(),
+        api_key, sender_email, _scheduler_recipients(),
         subject=f"Ready to Schedule: Order {d.get('job_order_no','—')}",
         html_body=html, log_context="needs-scheduling",
     )
