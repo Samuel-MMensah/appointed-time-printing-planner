@@ -73,6 +73,8 @@ if "cart_client_phone" not in st.session_state:
     st.session_state.cart_client_phone = ""
 if "last_raised_batch" not in st.session_state:
     st.session_state.last_raised_batch = []
+if "editing_cart_idx" not in st.session_state:
+    st.session_state.editing_cart_idx = None
 # GARMENT cart
 if "garment_cart_items" not in st.session_state:
     st.session_state.garment_cart_items = []
@@ -80,6 +82,8 @@ if "garment_cart_client_name" not in st.session_state:
     st.session_state.garment_cart_client_name = ""
 if "garment_cart_client_phone" not in st.session_state:
     st.session_state.garment_cart_client_phone = ""
+if "editing_garment_cart_idx" not in st.session_state:
+    st.session_state.editing_garment_cart_idx = None
 if "last_raised_garment_batch" not in st.session_state:
     st.session_state.last_raised_garment_batch = []
 
@@ -3056,6 +3060,50 @@ elif app_mode == "Raise Job Order":
                     f'Add more items below, or scroll down to submit the batch</div></div>',
                     unsafe_allow_html=True)
 
+            _editing_item = (
+                st.session_state.cart_items[st.session_state.editing_cart_idx]
+                if st.session_state.editing_cart_idx is not None
+                and 0 <= st.session_state.editing_cart_idx < len(st.session_state.cart_items)
+                else {}
+            )
+            def _ed(key, default=""):
+                v = _editing_item.get(key, default)
+                return v if v not in (None,) else default
+            def _edf(key, default=0.0):
+                v = _editing_item.get(key, default)
+                try:
+                    return float(v) if v not in (None, "") else default
+                except (TypeError, ValueError):
+                    return default
+            def _edi(key, default=0):
+                v = _editing_item.get(key, default)
+                try:
+                    return int(v) if v not in (None, "") else default
+                except (TypeError, ValueError):
+                    return default
+            def _edd(key):
+                v = _editing_item.get(key)
+                if v:
+                    try:
+                        return datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+                    except Exception:
+                        pass
+                return datetime.now().date()
+            def _edl(key, opts):
+                v = _editing_item.get(key, "")
+                if not v or v == "None":
+                    return []
+                return [x.strip() for x in str(v).split(",") if x.strip() in opts]
+
+            if _editing_item:
+                _ec1, _ec2 = st.columns([5, 1])
+                with _ec1:
+                    st.info(f"Editing Item {st.session_state.editing_cart_idx + 1} — correct the fields below and click Update.")
+                with _ec2:
+                    if st.button("Cancel Edit", key="cancel_cart_edit", use_container_width=True):
+                        st.session_state.editing_cart_idx = None
+                        st.rerun()
+
             with st.form("add_cart_item_form", clear_on_submit=True):
                 st.markdown('<div class="form-group-header">Client Identity — Shared Across All Items in This Batch</div>',
                             unsafe_allow_html=True)
@@ -3063,41 +3111,49 @@ elif app_mode == "Raise Job Order":
                 item_c_name  = _ci1.text_input("Customer Name ★", value=st.session_state.cart_client_name)
                 item_c_phone = _ci2.text_input("Telephone Number ★", value=st.session_state.cart_client_phone)
                 st.markdown('<div class="form-group-header">Product Item Specifications</div>', unsafe_allow_html=True)
-                item_desc = st.text_area("Item Description ★",
+                item_desc = st.text_area("Item Description ★", value=_ed("job_description"),
                                          placeholder="e.g. Skillet Box (250gsm Gloss), A5 Brochure, Business Cards...")
                 _if1, _if2, _if3, _if4 = st.columns(4)
-                item_t_amt  = _if1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0)
-                item_d_amt  = _if2.number_input("Deposit Paid (GHS)",         min_value=0.0, step=100.0)
-                item_b_due  = _if3.date_input("Balance Deadline ★")
-                item_c_date = _if4.date_input("Collection Date ★")
+                item_t_amt  = _if1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0, value=_edf("total_amount"))
+                item_d_amt  = _if2.number_input("Deposit Paid (GHS)",         min_value=0.0, step=100.0, value=_edf("deposit_amount"))
+                item_b_due  = _if3.date_input("Balance Deadline ★", value=_edd("balance_due_date"))
+                item_c_date = _if4.date_input("Collection Date ★",  value=_edd("date_of_collection"))
                 item_receipt_no = st.text_input(
                     "Receipt Number (required if a deposit is entered)",
-                    placeholder="e.g. RCT-00123")
+                    value=_ed("receipt_no"), placeholder="e.g. RCT-00123")
                 _is1, _is2, _is3, _is4 = st.columns(4)
-                item_qty        = _is1.number_input("Quantity ★", min_value=0, step=500)
+                item_qty        = _is1.number_input("Quantity ★", min_value=0, step=500, value=_edi("qty_to_print"))
                 _ipc_opts       = ["", "OFFSET", "DIGITAL PRESS", "PACKAGING"]
-                item_type_print = _is2.selectbox("Print Category ★", _ipc_opts)
+                _ipc_exist      = _ed("type_of_print")
+                item_type_print = _is2.selectbox("Print Category ★", _ipc_opts,
+                                                  index=_ipc_opts.index(_ipc_exist) if _ipc_exist in _ipc_opts else 0)
                 _imat_opts      = ["", "Customer Material", "Company Material"]
-                item_mat_source = _is3.selectbox("Material Source", _imat_opts)
+                _imat_exist     = _ed("material_source")
+                item_mat_source = _is3.selectbox("Material Source", _imat_opts,
+                                                  index=_imat_opts.index(_imat_exist) if _imat_exist in _imat_opts else 0)
                 _idel_opts      = ["Company Delivery", "Client Pickup"]
-                item_d_mode     = _is4.selectbox("Delivery Mode", _idel_opts)
+                _idel_exist     = _ed("delivery_mode")
+                item_d_mode     = _is4.selectbox("Delivery Mode", _idel_opts,
+                                                  index=_idel_opts.index(_idel_exist) if _idel_exist in _idel_opts else 0)
                 st.markdown('<div class="form-group-header">Material & Engineering Specifics</div>',
                             unsafe_allow_html=True)
                 _ip1, _ip2, _ip3, _ip4 = st.columns(4)
-                item_p_size   = _ip1.text_input("Print Size")
-                item_f_size   = _ip2.text_input("Finished Size")
-                item_pap_type = _ip3.text_input("Paper Material")
-                item_pap_gsm  = _ip4.text_input("GSM")
+                item_p_size   = _ip1.text_input("Print Size",     value=_ed("print_size"))
+                item_f_size   = _ip2.text_input("Finished Size",  value=_ed("finished_print_size"))
+                item_pap_type = _ip3.text_input("Paper Material", value=_ed("paper_type"))
+                item_pap_gsm  = _ip4.text_input("GSM",            value=_ed("gsm"))
                 _ix1, _ix2, _ix3 = st.columns(3)
-                item_pap_size = _ix1.text_input("Paper Size")
-                item_pap_col  = _ix2.text_input("Colour / Ink Specs")
-                item_imp_col  = _ix3.text_input("Impressions")
+                item_pap_size = _ix1.text_input("Paper Size",         value=_ed("paper_size"))
+                item_pap_col  = _ix2.text_input("Colour / Ink Specs", value=_ed("paper_colour"))
+                item_imp_col  = _ix3.text_input("Impressions",        value=_ed("impressions_colour"))
                 _ibind_opts = ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"]
-                item_b_type = st.multiselect("Binding Selection",    _ibind_opts)
+                item_b_type = st.multiselect("Binding Selection",    _ibind_opts, default=_edl("binding_type", _ibind_opts))
                 _ilam_opts  = ["Gloss Laminating", "Matt Laminating", "Soft Touch", "UV-Varnish"]
-                item_l_type = st.multiselect("Laminating Selection", _ilam_opts)
+                item_l_type = st.multiselect("Laminating Selection", _ilam_opts, default=_edl("laminating_type", _ilam_opts))
                 st.info(f"Handled By: {st.session_state.user_email} | Date: {datetime.now().strftime('%Y-%m-%d')}")
-                add_item_clicked = st.form_submit_button("Add Item to Cart", use_container_width=True)
+                add_item_clicked = st.form_submit_button(
+                    "Update Item in Cart" if _editing_item else "Add Item to Cart",
+                    use_container_width=True)
                 if add_item_clicked:
                     _item_missing = []
                     if not item_c_name.strip():  _item_missing.append("Customer Name")
@@ -3111,7 +3167,7 @@ elif app_mode == "Raise Job Order":
                     if not _item_missing:
                         st.session_state.cart_client_name  = item_c_name.strip()
                         st.session_state.cart_client_phone = item_c_phone.strip()
-                        st.session_state.cart_items.append({
+                        _new_item = {
                             "department":          "PRESS",
                             "job_description":     sanitize_string(item_desc),
                             "total_amount":        float(item_t_amt),
@@ -3135,8 +3191,15 @@ elif app_mode == "Raise Job Order":
                             # garment fields null for schema safety
                             "print_type": None, "yardage": None, "packaging_mode": None,
                             "process_info": None, "material_description": None,
-                        })
-                        st.toast(f"Item {len(st.session_state.cart_items)} added to cart!", icon="✅")
+                        }
+                        if (st.session_state.editing_cart_idx is not None
+                                and 0 <= st.session_state.editing_cart_idx < len(st.session_state.cart_items)):
+                            st.session_state.cart_items[st.session_state.editing_cart_idx] = _new_item
+                            st.session_state.editing_cart_idx = None
+                            st.toast("Item updated!", icon="✏️")
+                        else:
+                            st.session_state.cart_items.append(_new_item)
+                            st.toast(f"Item {len(st.session_state.cart_items)} added to cart!", icon="✅")
                         st.rerun()
                     else:
                         st.error(f"Cannot add item — missing required fields: {', '.join(_item_missing)}")
@@ -3146,7 +3209,7 @@ elif app_mode == "Raise Job Order":
                 st.markdown(f"### 🛒 Active Cart — {len(st.session_state.cart_items)} Item(s) for {st.session_state.cart_client_name}")
                 for _ci_idx, _ci_item in enumerate(st.session_state.cart_items):
                     _ci_preview = _ci_item['job_description'][:80] + ("…" if len(_ci_item['job_description']) > 80 else "")
-                    _col_info, _col_rm = st.columns([7, 1])
+                    _col_info, _col_edit, _col_rm = st.columns([6, 1, 1])
                     with _col_info:
                         st.markdown(
                             f'<div style="background:#f8fafc;border:1px solid #e2e8f0;'
@@ -3163,9 +3226,15 @@ elif app_mode == "Raise Job Order":
                             f' &nbsp;·&nbsp; '
                             f'Collection: <strong>{_ci_item["date_of_collection"]}</strong>'
                             f'</div></div>', unsafe_allow_html=True)
+                    with _col_edit:
+                        if st.button("✏️ Edit", key=f"edit_cart_{_ci_idx}", use_container_width=True):
+                            st.session_state.editing_cart_idx = _ci_idx
+                            st.rerun()
                     with _col_rm:
                         if st.button("✕ Remove", key=f"rm_cart_{_ci_idx}", use_container_width=True):
                             st.session_state.cart_items.pop(_ci_idx)
+                            if st.session_state.editing_cart_idx == _ci_idx:
+                                st.session_state.editing_cart_idx = None
                             st.rerun()
                 st.markdown("<br>", unsafe_allow_html=True)
                 _cart_total   = sum(x.get('total_amount',   0) for x in st.session_state.cart_items)
@@ -3189,7 +3258,7 @@ elif app_mode == "Raise Job Order":
                     f'</div>', unsafe_allow_html=True)
                 _sub_col, _clr_col = st.columns([3, 1])
                 with _sub_col:
-                    if st.button(f"🚀 SUBMIT {len(st.session_state.cart_items)} ITEM(S) FOR MANAGEMENT APPROVAL",
+                    if st.button(f"SUBMIT {len(st.session_state.cart_items)} ITEM(S) FOR MANAGEMENT APPROVAL",
                                  type="primary", use_container_width=True):
                         if not st.session_state.cart_client_name or not st.session_state.cart_client_phone:
                             st.error("Client name and telephone must be set before submitting the batch.")
@@ -3225,6 +3294,7 @@ elif app_mode == "Raise Job Order":
                                 st.session_state.cart_items         = []
                                 st.session_state.cart_client_name   = ""
                                 st.session_state.cart_client_phone  = ""
+                                st.session_state.editing_cart_idx   = None
                                 _notif = _submitted[0].copy()
                                 _notif['total_amount'] = sum(o.get('total_amount', 0) for o in _submitted)
                                 send_resend_notification(_notif)
@@ -3235,6 +3305,7 @@ elif app_mode == "Raise Job Order":
                         st.session_state.cart_items        = []
                         st.session_state.cart_client_name  = ""
                         st.session_state.cart_client_phone = ""
+                        st.session_state.editing_cart_idx  = None
                         st.rerun()
 
             if st.session_state.last_raised_batch:
@@ -3295,6 +3366,45 @@ elif app_mode == "Raise Job Order":
                     f'Add more items below, or scroll down to submit the batch</div></div>',
                     unsafe_allow_html=True)
 
+            _g_editing_item = (
+                st.session_state.garment_cart_items[st.session_state.editing_garment_cart_idx]
+                if st.session_state.editing_garment_cart_idx is not None
+                and 0 <= st.session_state.editing_garment_cart_idx < len(st.session_state.garment_cart_items)
+                else {}
+            )
+            def _ged(key, default=""):
+                v = _g_editing_item.get(key, default)
+                return v if v not in (None,) else default
+            def _gedf(key, default=0.0):
+                v = _g_editing_item.get(key, default)
+                try:
+                    return float(v) if v not in (None, "") else default
+                except (TypeError, ValueError):
+                    return default
+            def _gedi(key, default=0):
+                v = _g_editing_item.get(key, default)
+                try:
+                    return int(v) if v not in (None, "") else default
+                except (TypeError, ValueError):
+                    return default
+            def _gedd(key):
+                v = _g_editing_item.get(key)
+                if v:
+                    try:
+                        return datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+                    except Exception:
+                        pass
+                return datetime.now().date()
+
+            if _g_editing_item:
+                _gec1, _gec2 = st.columns([5, 1])
+                with _gec1:
+                    st.info(f"✏️ Editing Item {st.session_state.editing_garment_cart_idx + 1} — correct the fields below and click Update.")
+                with _gec2:
+                    if st.button("Cancel Edit", key="cancel_garment_cart_edit", use_container_width=True):
+                        st.session_state.editing_garment_cart_idx = None
+                        st.rerun()
+
             with st.form("add_garment_cart_item_form", clear_on_submit=True):
                 st.markdown('<div class="form-group-header">Client Identity — Shared Across All Garment Items</div>',
                             unsafe_allow_html=True)
@@ -3302,47 +3412,69 @@ elif app_mode == "Raise Job Order":
                 g_c_name  = _gi1.text_input("Customer Name ★", value=st.session_state.garment_cart_client_name)
                 g_c_phone = _gi2.text_input("Telephone Number ★", value=st.session_state.garment_cart_client_phone)
                 st.markdown('<div class="form-group-header">Item Description & Financial</div>', unsafe_allow_html=True)
-                g_desc = st.text_area("Item / Job Description ★",
+                g_desc = st.text_area("Item / Job Description ★", value=_ged("job_description"),
                                        placeholder="e.g. Custom T-Shirt DTF print, 50 pcs, White cotton...")
                 _gf1, _gf2, _gf3, _gf4 = st.columns(4)
-                g_t_amt  = _gf1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0)
-                g_d_amt  = _gf2.number_input("Deposit Paid (GHS)",          min_value=0.0, step=100.0)
-                g_b_due  = _gf3.date_input("Balance Deadline ★")
-                g_c_date = _gf4.date_input("Collection Date ★")
+                g_t_amt  = _gf1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0, value=_gedf("total_amount"))
+                g_d_amt  = _gf2.number_input("Deposit Paid (GHS)",          min_value=0.0, step=100.0, value=_gedf("deposit_amount"))
+                g_b_due  = _gf3.date_input("Balance Deadline ★", value=_gedd("balance_due_date"))
+                g_c_date = _gf4.date_input("Collection Date ★",  value=_gedd("date_of_collection"))
                 g_receipt_no = st.text_input(
                     "Receipt Number (required if a deposit is entered)",
-                    placeholder="e.g. RCT-00123")
+                    value=_ged("receipt_no"), placeholder="e.g. RCT-00123")
                 _gq1, _gq2 = st.columns(2)
-                g_qty        = _gq1.number_input("Quantity to Print ★", min_value=0, step=10)
-                g_mat_source = _gq2.selectbox("Material Source ★", ["", "Company Material", "Customer Material"])
+                g_qty        = _gq1.number_input("Quantity to Print ★", min_value=0, step=10, value=_gedi("qty_to_print"))
+                _gmat_opts   = ["", "Company Material", "Customer Material"]
+                _gmat_exist  = _ged("material_source")
+                g_mat_source = _gq2.selectbox("Material Source ★", _gmat_opts,
+                                               index=_gmat_opts.index(_gmat_exist) if _gmat_exist in _gmat_opts else 0)
                 st.markdown('<div class="form-group-header">Print Type & Dimensions</div>', unsafe_allow_html=True)
                 _gpt1, _gpt2 = st.columns(2)
-                g_print_type = _gpt1.selectbox("Print Type ★", ["", "DTF", "Flexi Screen Print", "UV-DTF", "SAV", "Embroidery"])
-                g_delivery   = _gpt2.selectbox("Delivery Mode ★", ["Company Delivery", "Customer Pick-up"])
+                _gprint_opts  = ["", "DTF", "Flexi Screen Print", "UV-DTF", "SAV", "Embroidery"]
+                _gprint_exist = _ged("print_type") or _ged("type_of_print")
+                g_print_type  = _gpt1.selectbox("Print Type ★", _gprint_opts,
+                                                 index=_gprint_opts.index(_gprint_exist) if _gprint_exist in _gprint_opts else 0)
+                _gdel_opts    = ["Company Delivery", "Customer Pick-up"]
+                _gdel_exist   = _ged("delivery_mode")
+                g_delivery    = _gpt2.selectbox("Delivery Mode ★", _gdel_opts,
+                                                 index=_gdel_opts.index(_gdel_exist) if _gdel_exist in _gdel_opts else 0)
                 _gps1, _gps2 = st.columns(2)
-                g_print_size = _gps1.selectbox("Print Size", ["", "A1", "A2", "A3", "A4", "A5", "A6"])
-                g_fin_size   = _gps2.selectbox("Finished Print Size / Yardage",
-                                                ["", "A1", "A2", "A3", "A4", "A5", "A6",
-                                                 "1YRD", "2YRDs", "3YRDs", "4YRDs", "5YRDs", "6YRDs",
-                                                 "3FTx4FT", "4FTx8FT"])
+                _gpsz_opts   = ["", "A1", "A2", "A3", "A4", "A5", "A6"]
+                _gpsz_exist  = _ged("print_size")
+                g_print_size = _gps1.selectbox("Print Size", _gpsz_opts,
+                                                index=_gpsz_opts.index(_gpsz_exist) if _gpsz_exist in _gpsz_opts else 0)
+                _gfsz_opts   = ["", "A1", "A2", "A3", "A4", "A5", "A6",
+                                "1YRD", "2YRDs", "3YRDs", "4YRDs", "5YRDs", "6YRDs",
+                                "3FTx4FT", "4FTx8FT"]
+                _gfsz_exist  = _ged("finished_print_size") or _ged("yardage")
+                g_fin_size   = _gps2.selectbox("Finished Print Size / Yardage", _gfsz_opts,
+                                                index=_gfsz_opts.index(_gfsz_exist) if _gfsz_exist in _gfsz_opts else 0)
                 st.markdown('<div class="form-group-header">Material Description</div>', unsafe_allow_html=True)
                 g_mat_desc     = st.text_area("Material Description (fabric type, colour, etc.)",
+                                               value=_ged("material_description"),
                                                placeholder="e.g. Cotton Jersey White, Polyester Red...")
                 g_add_comments = st.text_area("Additional Comments / Specifications",
+                                               value=_ged("additional_comments"),
                                                placeholder="Any other technical requirements...")
                 st.markdown('<div class="form-group-header">Packaging & Delivery</div>', unsafe_allow_html=True)
                 _gpkg1, _gpkg2, _gpkg3 = st.columns(3)
-                g_pkg_mode  = _gpkg1.selectbox("Packaging Mode", ["", "Box Packaging", "Bag Packaging", "None"])
-                g_qty_pack  = _gpkg2.number_input("Qty to Pack", min_value=0, step=1)
-                g_pkg_specs = _gpkg3.text_input("Packaging Specs")
+                _gpkgm_opts  = ["", "Box Packaging", "Bag Packaging", "None"]
+                _gpkgm_exist = _ged("packaging_mode")
+                g_pkg_mode  = _gpkg1.selectbox("Packaging Mode", _gpkgm_opts,
+                                                index=_gpkgm_opts.index(_gpkgm_exist) if _gpkgm_exist in _gpkgm_opts else 0)
+                g_qty_pack  = _gpkg2.number_input("Qty to Pack", min_value=0, step=1, value=_gedi("qty_to_pack"))
+                g_pkg_specs = _gpkg3.text_input("Packaging Specs", value=_ged("packaging_specs"))
                 _gloc1, _gloc2 = st.columns(2)
-                g_location = _gloc1.text_input("Delivery Location")
-                g_contact  = _gloc2.text_input("Delivery Contact Person")
+                g_location = _gloc1.text_input("Delivery Location", value=_ged("delivery_location"))
+                g_contact  = _gloc2.text_input("Delivery Contact Person", value=_ged("delivery_contact"))
                 st.markdown('<div class="form-group-header">Process / Technical Info</div>', unsafe_allow_html=True)
                 g_process_info = st.text_area("Process / Technical Information",
+                                               value=_ged("process_info"),
                                                placeholder="Stitching count, thread colour, press temperature...")
                 st.info(f"Handled By: {st.session_state.user_email} | Date: {datetime.now().strftime('%Y-%m-%d')}")
-                g_add_item_clicked = st.form_submit_button("Add Item to Cart", use_container_width=True)
+                g_add_item_clicked = st.form_submit_button(
+                    "💾 Update Item in Cart" if _g_editing_item else "Add Item to Cart",
+                    use_container_width=True)
                 if g_add_item_clicked:
                     _g_missing = []
                     if not g_c_name.strip():  _g_missing.append("Customer Name")
@@ -3363,7 +3495,7 @@ elif app_mode == "Raise Job Order":
                                 _mat_rows.append({"material": _ml.strip(), "sizes": g_fin_size, "colour": ""})
                         if not _mat_rows:
                             _mat_rows = [{"material": g_mat_desc, "sizes": g_fin_size, "colour": ""}]
-                        st.session_state.garment_cart_items.append({
+                        _new_g_item = {
                             "department":               "GARMENT",
                             "job_description":          sanitize_string(g_desc),
                             "total_amount":             float(g_t_amt),
@@ -3392,8 +3524,15 @@ elif app_mode == "Raise Job Order":
                             "paper_type": None, "gsm": None, "paper_size": None,
                             "paper_colour": None, "impressions_colour": None,
                             "binding_type": None, "laminating_type": None,
-                        })
-                        st.toast(f"Garment item {len(st.session_state.garment_cart_items)} added to cart!", icon="🧵")
+                        }
+                        if (st.session_state.editing_garment_cart_idx is not None
+                                and 0 <= st.session_state.editing_garment_cart_idx < len(st.session_state.garment_cart_items)):
+                            st.session_state.garment_cart_items[st.session_state.editing_garment_cart_idx] = _new_g_item
+                            st.session_state.editing_garment_cart_idx = None
+                            st.toast("Garment item updated!", icon="✏️")
+                        else:
+                            st.session_state.garment_cart_items.append(_new_g_item)
+                            st.toast(f"Garment item {len(st.session_state.garment_cart_items)} added to cart!", icon="🧵")
                         st.rerun()
                     else:
                         st.error(f"Cannot add item — missing required fields: {', '.join(_g_missing)}")
@@ -3403,7 +3542,7 @@ elif app_mode == "Raise Job Order":
                 st.markdown(f"### 🧵 Garment Cart — {len(st.session_state.garment_cart_items)} Item(s) for {st.session_state.garment_cart_client_name}")
                 for _gci_idx, _gci_item in enumerate(st.session_state.garment_cart_items):
                     _gci_preview = _gci_item['job_description'][:80] + ("…" if len(_gci_item['job_description']) > 80 else "")
-                    _gcol_info, _gcol_rm = st.columns([7, 1])
+                    _gcol_info, _gcol_edit, _gcol_rm = st.columns([6, 1, 1])
                     with _gcol_info:
                         st.markdown(
                             f'<div style="background:#fffbeb;border:1px solid #fde68a;'
@@ -3420,9 +3559,15 @@ elif app_mode == "Raise Job Order":
                             f' &nbsp;·&nbsp; '
                             f'Collection: <strong>{_gci_item["date_of_collection"]}</strong>'
                             f'</div></div>', unsafe_allow_html=True)
+                    with _gcol_edit:
+                        if st.button("✏️ Edit", key=f"gedit_cart_{_gci_idx}", use_container_width=True):
+                            st.session_state.editing_garment_cart_idx = _gci_idx
+                            st.rerun()
                     with _gcol_rm:
                         if st.button("✕ Remove", key=f"grm_cart_{_gci_idx}", use_container_width=True):
                             st.session_state.garment_cart_items.pop(_gci_idx)
+                            if st.session_state.editing_garment_cart_idx == _gci_idx:
+                                st.session_state.editing_garment_cart_idx = None
                             st.rerun()
                 st.markdown("<br>", unsafe_allow_html=True)
                 _g_cart_total   = sum(x.get('total_amount',   0) for x in st.session_state.garment_cart_items)
@@ -3487,6 +3632,7 @@ elif app_mode == "Raise Job Order":
                                 st.session_state.garment_cart_items         = []
                                 st.session_state.garment_cart_client_name   = ""
                                 st.session_state.garment_cart_client_phone  = ""
+                                st.session_state.editing_garment_cart_idx   = None
                                 _g_notif = _g_submitted[0].copy()
                                 _g_notif['total_amount'] = sum(o.get('total_amount', 0) for o in _g_submitted)
                                 send_resend_notification(_g_notif)
@@ -3497,6 +3643,7 @@ elif app_mode == "Raise Job Order":
                         st.session_state.garment_cart_items        = []
                         st.session_state.garment_cart_client_name  = ""
                         st.session_state.garment_cart_client_phone = ""
+                        st.session_state.editing_garment_cart_idx  = None
                         st.rerun()
 
             if st.session_state.last_raised_garment_batch:
