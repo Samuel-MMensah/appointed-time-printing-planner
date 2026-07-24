@@ -85,6 +85,7 @@ def render_dispatch_module(
         deposit    = float(row.get("deposit_amount", 0) or 0)
         balance    = max(0.0, total_amt - deposit)
         _not_ready = status.strip() != "At Warehouse"
+        _is_30day  = str(row.get("payment_terms", "") or "").strip() == "30-Day Credit Terms"
 
         with st.container():
             st.markdown(
@@ -142,6 +143,21 @@ def render_dispatch_module(
                     unsafe_allow_html=True,
                 )
 
+            _confirm_30day = False
+            if balance > 0 and _is_30day:
+                st.markdown(
+                    f'<div style="background:#eff6ff;border:1px solid #bfdbfe;'
+                    f'border-left:4px solid #3b82f6;border-radius:8px;'
+                    f'padding:0.65rem 1rem;margin:0.5rem 0;font-size:0.82rem;'
+                    f'color:#1e40af;font-weight:600;">'
+                    f'This order is flagged 30-Day Credit Terms — payment isn\'t expected yet. '
+                    f'Confirm below to allow dispatch without full payment.</div>',
+                    unsafe_allow_html=True,
+                )
+                _confirm_30day = st.checkbox(
+                    "Confirm this is a 30-day credit terms job — allow dispatch without full payment",
+                    key=f"confirm_30day_{row_id}")
+
             if _not_ready:
                 st.markdown(
                     '<div style="background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #f59e0b;'
@@ -154,7 +170,7 @@ def render_dispatch_module(
 
             if st.button(
                 "Finalize Dispatch", key=f"finalize_{row_id}",
-                disabled=(balance > 0 or _not_ready), use_container_width=True,
+                disabled=((balance > 0 and not _confirm_30day) or _not_ready), use_container_width=True,
                 type="primary",
             ):
                 if update_order_lifecycle_status(row_id, "Delivered"):

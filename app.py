@@ -101,6 +101,24 @@ if "global_search_q" not in st.session_state:
 # 3. GLOBAL SETUP & MACHINE REGISTRY
 # ═══════════════════════════════════════════════════════════════════
 CURRENCY = "GH₵"
+
+# Sales/marketing rep who brought the client in -- distinct from
+# created_by (whoever at Front Desk typed the order in). Used to CC the
+# rep at raise time so they see what was actually submitted against
+# what they promised the client, before MD/FM even approves it.
+# EDIT THIS with your real sales team's names and emails -- these three
+# are placeholders and won't reach anyone until replaced.
+SALES_REP_EMAILS = {
+    "Mabel Ampofo":   "mabel.ampofo@appointedtime.com.gh",
+    "Daphne Sarpong":   "d.sarpong@appointedtime.com.gh",
+    "Reginald Aidam": "reginald.aidam@appointedtime.com.gh",
+    "Charles Adoo": "charles.adoo@appointedtime.com.gh",
+    "Isaac Kum": "isaac.kum@appointedtime.com.gh",
+    "Bertha Tackie": "bertha.tackie@appointedtime.com.gh",
+    "Christian Mante": "christian.mante@appointedtime.com.gh",
+    "Jacqueline Afful": "jacqueline.afful@appointedtime.com.gh",
+}
+
 SHIFT_START_HOUR = 8
 SHIFT_END_HOUR = 17
 DAILY_CAPACITY_HOURS = 8.0
@@ -267,7 +285,10 @@ def _collection_alert_recipients():
 
 
 def send_resend_notification(payload):
-    """Notify management that a new order needs authorization sign-off."""
+    """Notify management that a new order needs authorization sign-off.
+    Also CCs the sales/marketing rep who brought the job, if one was
+    selected -- so they see what was actually submitted against what
+    they told the client, before it's even approved."""
     api_key      = st.secrets.get("RESEND_API_KEY")
     sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
     dept_label   = payload.get('department', 'PRESS')
@@ -280,18 +301,35 @@ def send_resend_notification(payload):
             ("Job Order No:",   str(payload.get('job_order_no', 'PENDING')), "#0369a1"),
             ("Customer:",       str(payload.get('customer_name', '—')),      None),
             ("Contract Value:", f"{CURRENCY} {float(payload.get('total_amount', 0) or 0):,.2f}", None),
+            ("Sales Rep:",      str(payload.get('sales_rep') or '—'),        None),
         ],
         footer="Access Authorization Center to proceed.",
     )
+    _recipients = list(_approval_recipients())
+    _rep_name = payload.get('sales_rep')
+    _rep_email = SALES_REP_EMAILS.get(_rep_name) if _rep_name else None
+    if _rep_email and _rep_email.lower() not in [r.lower() for r in _recipients]:
+        _recipients.append(_rep_email)
     _send_resend_email(
-        api_key, sender_email, _approval_recipients(),
+        api_key, sender_email, _recipients,
         subject=f"Executive Action: Order {payload.get('job_order_no','PENDING')} Submitted",
         html_body=html, log_context="new-order-submitted",
     )
 
 
+def _approval_cc_recipients():
+    """Finance and Warehouse get a copy of every approval, so they see
+    what's coming before it reaches their own stage. Falls back to the
+    real current Finance/Warehouse addresses, not a placeholder."""
+    raw = st.secrets.get("APPROVAL_CC_EMAILS", "")
+    emails = [e.strip() for e in raw.split(",") if e.strip()]
+    return emails or ["celestina.foli@appointedtime.com.gh", "appointedtime.supplychain@gmail.com"]
+
+
 def notify_order_approved(order_data: dict) -> None:
-    """Email the order creator when management approves their order."""
+    """Email the order creator when management approves their order.
+    Finance and Warehouse are CC'd on every approval (see
+    _approval_cc_recipients) so both see it land before it's their turn."""
     d = order_data
     recipient = str(d.get("created_by", "") or "")
     if "@" not in recipient:
@@ -310,8 +348,9 @@ def notify_order_approved(order_data: dict) -> None:
         ],
         footer=f"Approved by: {d.get('approved_by','Management')} &middot; Date: {d.get('approval_date','')}",
     )
+    _recipients = [recipient] + [e for e in _approval_cc_recipients() if e.lower() != recipient.lower()]
     _send_resend_email(
-        api_key, sender_email, [recipient],
+        api_key, sender_email, _recipients,
         subject=f"Approved: Order {d.get('job_order_no','—')} is live",
         html_body=html, log_context="order-approved",
     )
@@ -1379,14 +1418,40 @@ def generate_pdf_manifest(ticket):
         ('BOTTOMPADDING',(0,0), (-1,-1), 4)
     ]))
     elements.append(t_cust)
-    elements.append(Spacer(1, 12))
-    type_print = str(ticket.get('type_of_print', '') or '')
-    mat_source = str(ticket.get('material_source', '') or '')
+    elements.append(Spacer(1, 8))
+
+    # ── Payment terms — explicit when no deposit was taken, so nobody
+    # has to infer "0.00 deposit" as either an oversight or a policy ──
+    _pdf_terms = str(ticket.get('payment_terms', '') or '').strip()
+    if deposit <= 0:
+        _terms_text = (
+            "PAYMENT TERMS: 30-Day Credit — payment due within 30 days of collection."
+            if _pdf_terms == "30-Day Credit Terms" else
+            "PAYMENT TERMS: Full payment due before collection — no deposit was taken on this order."
+        )
+        elements.append(Paragraph(
+            _terms_text,
+            ParagraphStyle('TermsNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
+                           textColor=colors.HexColor("#92400e"), backColor=colors.HexColor("#fffbeb"),
+                           borderColor=colors.HexColor("#fde68a"), borderWidth=1, borderPadding=6)
+        ))
+        elements.append(Spacer(1, 8))
+
+    _pdf_sample = str(ticket.get('sample_attached', '') or '').strip()
+    if _pdf_sample == "Yes":
+        elements.append(Paragraph(
+            f"SAMPLE ATTACHED — with: {str(ticket.get('sample_with','') or '—')}",
+            ParagraphStyle('SampleNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
+                           textColor=colors.HexColor("#0369a1"), backColor=colors.HexColor("#f0f9ff"),
+                           borderColor=colors.HexColor("#bae6fd"), borderWidth=1, borderPadding=6)
+        ))
+        elements.append(Spacer(1, 8))
+
+    type_print = str(ticket.get('type_of_print', '') or '').strip() or '—'
+    mat_source = str(ticket.get('material_source', '') or '').strip() or '—'
     cat_data = [
-        [Paragraph("TYPE OF PRINT", bold_style),
-         Paragraph(f"{cb(type_print,'OFFSET')} OFFSET    {cb(type_print,'DIGITAL PRESS')} DIGITAL PRESS    {cb(type_print,'PACKAGING')} PACKAGING", normal_style)],
-        [Paragraph("MATERIAL SOURCE", bold_style),
-         Paragraph(f"{cb(mat_source,'COMPANY MATERIAL')} COMPANY MATERIAL    {cb(mat_source,'CUSTOMER MATERIAL')} CUSTOMER MATERIAL", normal_style)]
+        [Paragraph("TYPE OF PRINT", bold_style), Paragraph(type_print, normal_style)],
+        [Paragraph("MATERIAL SOURCE", bold_style), Paragraph(mat_source, normal_style)]
     ]
     t_cat = Table(cat_data, colWidths=[2.0*inch, 5.0*inch])
     t_cat.setStyle(TableStyle([
@@ -1445,18 +1510,12 @@ def generate_pdf_manifest(ticket):
          Paragraph("IMPRESSION", bold_style),
          Paragraph(str(ticket.get('impressions_colour', '-') or '-'), normal_style)],
         [Paragraph("DELIVERY MODE", bold_style),
-         Paragraph(f"{cb(del_mode,'COMPANY DELIVERY')} COMPANY DELIVERY   {cb(del_mode,'CLIENT PICKUP')} CUSTOMER PICK-UP", normal_style),
+         Paragraph(del_mode.strip() or '—', normal_style),
          Paragraph("", normal_style), Paragraph("", normal_style)],
         [Paragraph("BINDING", bold_style),
-         Paragraph(f"{cb(bind_type,'Perfect Binding')} Perfect Binding<br/>"
-                   f"{cb(bind_type,'Spiral Binding')} Spiral Binding<br/>"
-                   f"{cb(bind_type,'Saddle Stitching')} Saddle Stitching<br/>"
-                   f"{cb(bind_type,'Comb Binding')} Comb Binding", normal_style),
+         Paragraph(bind_type.strip() or 'None', normal_style),
          Paragraph("LAMINATING", bold_style),
-         Paragraph(f"{cb(lam_type,'Gloss Laminating')} Gloss Laminating<br/>"
-                   f"{cb(lam_type,'Matt Laminating')} Matt Laminating<br/>"
-                   f"{cb(lam_type,'Soft Touch')} Soft Touch<br/>"
-                   f"{cb(lam_type,'UV-Varnish')} UV-Varnish", normal_style)]
+         Paragraph(lam_type.strip() or 'None', normal_style)]
     ]
     t_fin = Table(finishing_data, colWidths=[1.2*inch, 2.3*inch, 1.2*inch, 2.3*inch])
     t_fin.setStyle(TableStyle([
@@ -1600,12 +1659,7 @@ def generate_garment_pdf_manifest(ticket):
     dept_val = safe(ticket.get('department', 'GARMENT'), 'GARMENT').upper()
     dept_data = [[
         Paragraph("<b>DEPT</b>", white_b),
-        Paragraph(
-            f"{cb(dept_val,'LARGE FORMAT')} Large Format  "
-            f"{cb(dept_val,'EMBROIDERY')} Embroidery  "
-            f"{cb(dept_val,'SCREEN PRINT')} Screen Print",
-            norm_s
-        ),
+        Paragraph(dept_val, norm_s),
     ]]
     t_dept = Table(dept_data, colWidths=[0.6*inch, FULL_W - 0.6*inch])
     t_dept.setStyle(TableStyle([
@@ -1660,23 +1714,37 @@ def generate_garment_pdf_manifest(ticket):
     elements.append(t_cf)
     elements.append(Spacer(1, 5))
 
+    _g_pdf_terms = safe(ticket.get('payment_terms'), '')
+    if deposit <= 0:
+        _g_terms_text = (
+            "PAYMENT TERMS: 30-Day Credit — payment due within 30 days of collection."
+            if _g_pdf_terms == "30-Day Credit Terms" else
+            "PAYMENT TERMS: Full payment due before collection — no deposit was taken on this order."
+        )
+        elements.append(Paragraph(
+            _g_terms_text,
+            ParagraphStyle('GTermsNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
+                           textColor=colors.HexColor("#92400e"), backColor=colors.HexColor("#fffbeb"),
+                           borderColor=colors.HexColor("#fde68a"), borderWidth=1, borderPadding=6)
+        ))
+        elements.append(Spacer(1, 5))
+
+    _g_pdf_sample = safe(ticket.get('sample_attached'), '')
+    if _g_pdf_sample == "Yes":
+        elements.append(Paragraph(
+            f"SAMPLE ATTACHED — with: {safe(ticket.get('sample_with'))}",
+            ParagraphStyle('GSampleNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
+                           textColor=colors.HexColor("#0369a1"), backColor=colors.HexColor("#f0f9ff"),
+                           borderColor=colors.HexColor("#bae6fd"), borderWidth=1, borderPadding=6)
+        ))
+        elements.append(Spacer(1, 5))
+
     # ── TYPE OF PRINT ─────────────────────────────────────────────────
-    type_print = safe(ticket.get('print_type') or ticket.get('type_of_print'), '')
-    mat_source = safe(ticket.get('material_source'), '')
+    type_print = safe(ticket.get('print_type') or ticket.get('type_of_print'), '').strip() or '—'
+    mat_source = safe(ticket.get('material_source'), '').strip() or '—'
     tp_data = [
-        [Paragraph("<b>TYPE OF PRINT</b>", bold_s),
-         Paragraph(
-             f"{cb(type_print,'DTF')} DTF  {cb(type_print,'FLEXI')} Flexi  "
-             f"{cb(type_print,'SCREEN PRINT')} Screen Print  {cb(type_print,'UV-DTF')} UV-DTF  "
-             f"{cb(type_print,'SAV')} SAV  {cb(type_print,'EMBROIDERY')} Embroidery",
-             norm_s
-         )],
-        [Paragraph("<b>MATERIAL SOURCE</b>", bold_s),
-         Paragraph(
-             f"{cb(mat_source,'COMPANY MATERIAL')} COMPANY MATERIAL    "
-             f"{cb(mat_source,'CUSTOMER MATERIAL')} CUSTOMER MATERIAL",
-             norm_s
-         )],
+        [Paragraph("<b>TYPE OF PRINT</b>", bold_s), Paragraph(type_print, norm_s)],
+        [Paragraph("<b>MATERIAL SOURCE</b>", bold_s), Paragraph(mat_source, norm_s)],
     ]
     t_tp = Table(tp_data, colWidths=[1.5*inch, FULL_W - 1.5*inch])
     t_tp.setStyle(TableStyle([
@@ -1811,8 +1879,8 @@ def generate_garment_pdf_manifest(ticket):
     elements.append(Spacer(1, 5))
 
     # ── PACKAGING + DELIVERY MODE ─────────────────────────────────────
-    pkg_mode  = safe(ticket.get('packaging_mode'), '')
-    del_mode  = safe(ticket.get('delivery_mode'),  '')
+    pkg_mode  = safe(ticket.get('packaging_mode'), '').strip() or '—'
+    del_mode  = safe(ticket.get('delivery_mode'),  '').strip() or '—'
     qty_pack  = safe(ticket.get('qty_to_pack'),    '')
     location  = safe(ticket.get('delivery_location'), '')
     contact   = safe(ticket.get('delivery_contact'),  '')
@@ -1820,13 +1888,10 @@ def generate_garment_pdf_manifest(ticket):
     half      = FULL_W / 2
     pkg_data  = [
         [Paragraph("<b>PACKAGING</b>", white_b), Paragraph("<b>DELIVERY MODE</b>", white_b)],
-        [Paragraph(f"BOX PACKAGING {cb(pkg_mode,'BOX')}  &nbsp;&nbsp;  BAG PACKAGING {cb(pkg_mode,'BAG')}", bold_s),
-         Paragraph("COMPANY DELIVERY &nbsp;&nbsp; CUSTOMER PICK-UP", bold_s)],
+        [Paragraph(pkg_mode, bold_s), Paragraph(del_mode, bold_s)],
         [Paragraph(f"QTY TO PACK: {qty_pack}", norm_s),
-         Paragraph(f"{cb(del_mode,'COMPANY DELIVERY')} Company Delivery &nbsp;&nbsp; {cb(del_mode,'CUSTOMER PICK')} Customer Pick-Up", norm_s)],
-        [Paragraph(pkg_specs, norm_s),
          Paragraph(f"LOCATION: {location}", norm_s)],
-        [Paragraph("", norm_s),
+        [Paragraph(pkg_specs, norm_s),
          Paragraph(f"CONTACT PERSON: {contact}", norm_s)],
     ]
     t_pkg = Table(pkg_data, colWidths=[half, half])
@@ -3256,14 +3321,45 @@ elif app_mode == "Raise Job Order":
                     f'letter-spacing:0.06em;margin-bottom:0.15rem;">TOTAL DEPOSIT COLLECTED</div>'
                     f'<div style="font-weight:700;font-size:1rem;color:#7dd3fc;">{CURRENCY} {_cart_deposit:,.2f}</div></div>'
                     f'</div>', unsafe_allow_html=True)
+
+                st.markdown("### 📎 Attachments &amp; Terms — Applies to This Whole Batch")
+                _batch_lpo_file = st.file_uploader(
+                    "Upload LPO / Sample Photo (optional)", type=["pdf", "jpg", "jpeg", "png"],
+                    key="cart_lpo_upload")
+                _sa1, _sa2 = st.columns(2)
+                _batch_sample_attached = _sa1.selectbox("Sample Attached?", ["No", "Yes"], key="cart_sample_attached")
+                _batch_sample_with = _sa2.text_input(
+                    "Sample With (required if Yes)", key="cart_sample_with",
+                    placeholder="e.g. Front Desk, With Client, Production")
+                _pt1, _pt2 = st.columns(2)
+                _batch_payment_terms = _pt1.selectbox(
+                    "Payment Terms", ["Standard (Deposit / Full Payment)", "30-Day Credit Terms"],
+                    key="cart_payment_terms")
+                _batch_sales_rep = _pt2.selectbox(
+                    "Sales / Marketing Rep (who brought this job)",
+                    ["— None / Walk-in —"] + list(SALES_REP_EMAILS.keys()), key="cart_sales_rep")
+
                 _sub_col, _clr_col = st.columns([3, 1])
                 with _sub_col:
                     if st.button(f"SUBMIT {len(st.session_state.cart_items)} ITEM(S) FOR MANAGEMENT APPROVAL",
                                  type="primary", use_container_width=True):
                         if not st.session_state.cart_client_name or not st.session_state.cart_client_phone:
                             st.error("Client name and telephone must be set before submitting the batch.")
+                        elif _batch_sample_attached == "Yes" and not _batch_sample_with.strip():
+                            st.error("Sample is marked attached — enter who has it before submitting.")
                         else:
                             _pgid      = f"PG-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000,9999)}"
+                            _lpo_url = None
+                            if _batch_lpo_file is not None:
+                                try:
+                                    _file_bytes = _batch_lpo_file.getvalue()
+                                    _storage_path = f"{_pgid}/{_batch_lpo_file.name}"
+                                    supabase.storage.from_('job-attachments').upload(
+                                        _storage_path, _file_bytes,
+                                        {"content-type": _batch_lpo_file.type or "application/octet-stream"})
+                                    _lpo_url = supabase.storage.from_('job-attachments').get_public_url(_storage_path)
+                                except Exception as _upl_err:
+                                    st.warning(f"LPO/sample upload failed (order will still submit without it): {_upl_err}")
                             _submitted = []
                             _batch_err = False
                             for _b_item in st.session_state.cart_items:
@@ -3274,6 +3370,11 @@ elif app_mode == "Raise Job Order":
                                     "status":           "Pending Approval",
                                     "created_by":       st.session_state.user_email,
                                     "order_date":       datetime.now().strftime('%Y-%m-%d'),
+                                    "sample_attached":  _batch_sample_attached,
+                                    "sample_with":      sanitize_string(_batch_sample_with) if _batch_sample_attached == "Yes" else None,
+                                    "lpo_file_url":     _lpo_url,
+                                    "payment_terms":    _batch_payment_terms,
+                                    "sales_rep":        _batch_sales_rep if _batch_sales_rep != "— None / Walk-in —" else None,
                                     **_b_item
                                 }
                                 try:
@@ -3589,6 +3690,24 @@ elif app_mode == "Raise Job Order":
                     f'letter-spacing:0.06em;margin-bottom:0.15rem;">DEPOSITS COLLECTED</div>'
                     f'<div style="font-weight:700;font-size:1rem;color:#fcd34d;">{CURRENCY} {_g_cart_deposit:,.2f}</div></div>'
                     f'</div>', unsafe_allow_html=True)
+
+                st.markdown("### 📎 Attachments &amp; Terms — Applies to This Whole Batch")
+                _g_batch_lpo_file = st.file_uploader(
+                    "Upload LPO / Sample Photo (optional)", type=["pdf", "jpg", "jpeg", "png"],
+                    key="garment_cart_lpo_upload")
+                _gsa1, _gsa2 = st.columns(2)
+                _g_batch_sample_attached = _gsa1.selectbox("Sample Attached?", ["No", "Yes"], key="garment_cart_sample_attached")
+                _g_batch_sample_with = _gsa2.text_input(
+                    "Sample With (required if Yes)", key="garment_cart_sample_with",
+                    placeholder="e.g. Front Desk, With Client, Production")
+                _gpt1, _gpt2 = st.columns(2)
+                _g_batch_payment_terms = _gpt1.selectbox(
+                    "Payment Terms", ["Standard (Deposit / Full Payment)", "30-Day Credit Terms"],
+                    key="garment_cart_payment_terms")
+                _g_batch_sales_rep = _gpt2.selectbox(
+                    "Sales / Marketing Rep (who brought this job)",
+                    ["— None / Walk-in —"] + list(SALES_REP_EMAILS.keys()), key="garment_cart_sales_rep")
+
                 _gsub_col, _gclr_col = st.columns([3, 1])
                 with _gsub_col:
                     if st.button(
@@ -3597,8 +3716,21 @@ elif app_mode == "Raise Job Order":
                     ):
                         if not st.session_state.garment_cart_client_name or not st.session_state.garment_cart_client_phone:
                             st.error("Client name and telephone must be set before submitting the batch.")
+                        elif _g_batch_sample_attached == "Yes" and not _g_batch_sample_with.strip():
+                            st.error("Sample is marked attached — enter who has it before submitting.")
                         else:
                             _g_pgid      = f"GPG-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000,9999)}"
+                            _g_lpo_url = None
+                            if _g_batch_lpo_file is not None:
+                                try:
+                                    _g_file_bytes = _g_batch_lpo_file.getvalue()
+                                    _g_storage_path = f"{_g_pgid}/{_g_batch_lpo_file.name}"
+                                    supabase.storage.from_('job-attachments').upload(
+                                        _g_storage_path, _g_file_bytes,
+                                        {"content-type": _g_batch_lpo_file.type or "application/octet-stream"})
+                                    _g_lpo_url = supabase.storage.from_('job-attachments').get_public_url(_g_storage_path)
+                                except Exception as _g_upl_err:
+                                    st.warning(f"LPO/sample upload failed (order will still submit without it): {_g_upl_err}")
                             _g_submitted = []
                             _g_batch_err = False
                             for _gb_item in st.session_state.garment_cart_items:
@@ -3609,6 +3741,11 @@ elif app_mode == "Raise Job Order":
                                     "status":           "Pending Approval",
                                     "created_by":       st.session_state.user_email,
                                     "order_date":       datetime.now().strftime('%Y-%m-%d'),
+                                    "sample_attached":  _g_batch_sample_attached,
+                                    "sample_with":      sanitize_string(_g_batch_sample_with) if _g_batch_sample_attached == "Yes" else None,
+                                    "lpo_file_url":     _g_lpo_url,
+                                    "payment_terms":    _g_batch_payment_terms,
+                                    "sales_rep":        _g_batch_sales_rep if _g_batch_sales_rep != "— None / Walk-in —" else None,
                                     **_gb_item
                                 }
                                 # material_description_rows is Python-only; remove before Supabase insert
