@@ -166,18 +166,22 @@ def send_departmental_alert(order_data: dict) -> bool:
         )
     else:
         _intro = "An order assigned to your department requires attention."
+    _rows = [
+        ("Order No", order_no),
+        ("Customer", str(order_data.get("customer_name", "—"))),
+        ("Status", str(order_data.get("status", "—"))),
+        ("Contract Value",
+         f"{CURRENCY} {float(order_data.get('total_amount', 0) or 0):,.2f}"),
+    ]
+    _sample_url = order_data.get("sample_file_url")
+    if _sample_url:
+        _rows.append(("Sample Photo", f'<a href="{_sample_url}">View Sample</a>'))
     html = _alert_shell(
         accent_bg="#0f172a",
         heading=f"{department.upper()} DEPARTMENT ALERT",
         subheading="Appointed Time Printing Enterprise Hub",
         intro=_intro,
-        rows=[
-            ("Order No", order_no),
-            ("Customer", str(order_data.get("customer_name", "—"))),
-            ("Status", str(order_data.get("status", "—"))),
-            ("Contract Value",
-             f"{CURRENCY} {float(order_data.get('total_amount', 0) or 0):,.2f}"),
-        ],
+        rows=_rows,
         footer_note="This is an automated notification from the Appointed Time Enterprise Hub.",
     )
     _send_resend_email(

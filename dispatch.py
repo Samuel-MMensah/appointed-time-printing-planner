@@ -85,7 +85,7 @@ def render_dispatch_module(
         deposit    = float(row.get("deposit_amount", 0) or 0)
         balance    = max(0.0, total_amt - deposit)
         _not_ready = status.strip() != "At Warehouse"
-        _is_30day  = str(row.get("payment_terms", "") or "").strip() == "30-Day Credit Terms"
+        _is_30day  = "30-Day Credit Terms" in str(row.get("payment_terms", "") or "")
 
         with st.container():
             st.markdown(

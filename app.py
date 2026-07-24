@@ -119,6 +119,7 @@ SALES_REP_EMAILS = {
     "Jacqueline Afful": "jacqueline.afful@appointedtime.com.gh",
 }
 
+
 SHIFT_START_HOUR = 8
 SHIFT_END_HOUR = 17
 DAILY_CAPACITY_HOURS = 8.0
@@ -292,17 +293,21 @@ def send_resend_notification(payload):
     api_key      = st.secrets.get("RESEND_API_KEY")
     sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
     dept_label   = payload.get('department', 'PRESS')
+    _rows = [
+        ("Job Order No:",   str(payload.get('job_order_no', 'PENDING')), "#0369a1"),
+        ("Customer:",       str(payload.get('customer_name', '—')),      None),
+        ("Contract Value:", f"{CURRENCY} {float(payload.get('total_amount', 0) or 0):,.2f}", None),
+        ("Sales Rep:",      str(payload.get('sales_rep') or '—'),        None),
+    ]
+    _lpo_url = payload.get('lpo_file_url')
+    if _lpo_url:
+        _rows.append(("LPO:", f'<a href="{_lpo_url}">Open LPO</a>', None))
     html = _email_shell(
         accent_bg="#0f172a",
         heading="EXECUTIVE APPROVAL REQUIRED",
         subheading=f"Appointed Time Printing Enterprise Hub &mdash; {dept_label} DEPT",
         intro="A new order requires authorization sign-off.",
-        rows=[
-            ("Job Order No:",   str(payload.get('job_order_no', 'PENDING')), "#0369a1"),
-            ("Customer:",       str(payload.get('customer_name', '—')),      None),
-            ("Contract Value:", f"{CURRENCY} {float(payload.get('total_amount', 0) or 0):,.2f}", None),
-            ("Sales Rep:",      str(payload.get('sales_rep') or '—'),        None),
-        ],
+        rows=_rows,
         footer="Access Authorization Center to proceed.",
     )
     _recipients = list(_approval_recipients())
@@ -1423,12 +1428,20 @@ def generate_pdf_manifest(ticket):
     # ── Payment terms — explicit when no deposit was taken, so nobody
     # has to infer "0.00 deposit" as either an oversight or a policy ──
     _pdf_terms = str(ticket.get('payment_terms', '') or '').strip()
-    if deposit <= 0:
-        _terms_text = (
-            "PAYMENT TERMS: 30-Day Credit — payment due within 30 days of collection."
-            if _pdf_terms == "30-Day Credit Terms" else
-            "PAYMENT TERMS: Full payment due before collection — no deposit was taken on this order."
+    if balance > 0:
+        _is_30day_pdf = "30-Day Credit Terms" in _pdf_terms
+        _notes_part = (
+            _pdf_terms.split("|", 1)[1].strip() if "|" in _pdf_terms
+            else (_pdf_terms if not _is_30day_pdf else "")
         )
+        if _is_30day_pdf:
+            _terms_text = "PAYMENT TERMS: 30-Day Credit — payment due within 30 days of collection."
+            if _notes_part:
+                _terms_text += f" Note: {_notes_part}"
+        elif _notes_part:
+            _terms_text = f"PAYMENT TERMS: {_notes_part}"
+        else:
+            _terms_text = "PAYMENT TERMS: Full payment due before collection — no arrangement specified for this outstanding balance."
         elements.append(Paragraph(
             _terms_text,
             ParagraphStyle('TermsNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
@@ -1715,12 +1728,20 @@ def generate_garment_pdf_manifest(ticket):
     elements.append(Spacer(1, 5))
 
     _g_pdf_terms = safe(ticket.get('payment_terms'), '')
-    if deposit <= 0:
-        _g_terms_text = (
-            "PAYMENT TERMS: 30-Day Credit — payment due within 30 days of collection."
-            if _g_pdf_terms == "30-Day Credit Terms" else
-            "PAYMENT TERMS: Full payment due before collection — no deposit was taken on this order."
+    if balance > 0:
+        _g_is_30day_pdf = "30-Day Credit Terms" in _g_pdf_terms
+        _g_notes_part = (
+            _g_pdf_terms.split("|", 1)[1].strip() if "|" in _g_pdf_terms
+            else (_g_pdf_terms if not _g_is_30day_pdf else "")
         )
+        if _g_is_30day_pdf:
+            _g_terms_text = "PAYMENT TERMS: 30-Day Credit — payment due within 30 days of collection."
+            if _g_notes_part:
+                _g_terms_text += f" Note: {_g_notes_part}"
+        elif _g_notes_part:
+            _g_terms_text = f"PAYMENT TERMS: {_g_notes_part}"
+        else:
+            _g_terms_text = "PAYMENT TERMS: Full payment due before collection — no arrangement specified for this outstanding balance."
         elements.append(Paragraph(
             _g_terms_text,
             ParagraphStyle('GTermsNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
@@ -3304,6 +3325,10 @@ elif app_mode == "Raise Job Order":
                 st.markdown("<br>", unsafe_allow_html=True)
                 _cart_total   = sum(x.get('total_amount',   0) for x in st.session_state.cart_items)
                 _cart_deposit = sum(x.get('deposit_amount', 0) for x in st.session_state.cart_items)
+                _cart_has_balance = any(
+                    float(x.get('total_amount', 0) or 0) != float(x.get('deposit_amount', 0) or 0)
+                    for x in st.session_state.cart_items
+                )
                 st.markdown(
                     f'<div style="background:linear-gradient(135deg,#0f172a,#1e293b);'
                     f'color:#ffffff;border-radius:10px;padding:1rem 1.5rem;margin-bottom:1.25rem;'
@@ -3323,21 +3348,29 @@ elif app_mode == "Raise Job Order":
                     f'</div>', unsafe_allow_html=True)
 
                 st.markdown("### 📎 Attachments &amp; Terms — Applies to This Whole Batch")
-                _batch_lpo_file = st.file_uploader(
-                    "Upload LPO / Sample Photo (optional)", type=["pdf", "jpg", "jpeg", "png"],
+                _ba1, _ba2 = st.columns(2)
+                _batch_lpo_file = _ba1.file_uploader(
+                    "Upload LPO (optional) — goes to MD/FM", type=["pdf", "jpg", "jpeg", "png"],
                     key="cart_lpo_upload")
+                _batch_sample_file = _ba2.file_uploader(
+                    "Upload Sample Photo (optional) — goes to the department", type=["pdf", "jpg", "jpeg", "png"],
+                    key="cart_sample_upload")
                 _sa1, _sa2 = st.columns(2)
                 _batch_sample_attached = _sa1.selectbox("Sample Attached?", ["No", "Yes"], key="cart_sample_attached")
                 _batch_sample_with = _sa2.text_input(
                     "Sample With (required if Yes)", key="cart_sample_with",
                     placeholder="e.g. Front Desk, With Client, Production")
                 _pt1, _pt2 = st.columns(2)
-                _batch_payment_terms = _pt1.selectbox(
-                    "Payment Terms", ["Standard (Deposit / Full Payment)", "30-Day Credit Terms"],
-                    key="cart_payment_terms")
+                _batch_30day = _pt1.checkbox("30-Day Credit Terms job", key="cart_30day")
                 _batch_sales_rep = _pt2.selectbox(
                     "Sales / Marketing Rep (who brought this job)",
                     ["— None / Walk-in —"] + list(SALES_REP_EMAILS.keys()), key="cart_sales_rep")
+                _batch_terms_notes = ""
+                if _cart_has_balance:
+                    _batch_terms_notes = st.text_area(
+                        "Payment Terms Notes — this batch isn't fully paid; explain the arrangement for MD/FM",
+                        key="cart_terms_notes",
+                        placeholder="e.g. Client to pay balance on collection; LPO attached; verbal agreement with MD on...")
 
                 _sub_col, _clr_col = st.columns([3, 1])
                 with _sub_col:
@@ -3349,17 +3382,28 @@ elif app_mode == "Raise Job Order":
                             st.error("Sample is marked attached — enter who has it before submitting.")
                         else:
                             _pgid      = f"PG-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000,9999)}"
-                            _lpo_url = None
-                            if _batch_lpo_file is not None:
+
+                            def _upload_batch_file(_f, _label):
+                                if _f is None:
+                                    return None
                                 try:
-                                    _file_bytes = _batch_lpo_file.getvalue()
-                                    _storage_path = f"{_pgid}/{_batch_lpo_file.name}"
+                                    _fb = _f.getvalue()
+                                    _sp = f"{_pgid}/{_f.name}"
                                     supabase.storage.from_('job-attachments').upload(
-                                        _storage_path, _file_bytes,
-                                        {"content-type": _batch_lpo_file.type or "application/octet-stream"})
-                                    _lpo_url = supabase.storage.from_('job-attachments').get_public_url(_storage_path)
-                                except Exception as _upl_err:
-                                    st.warning(f"LPO/sample upload failed (order will still submit without it): {_upl_err}")
+                                        _sp, _fb, {"content-type": _f.type or "application/octet-stream"})
+                                    return supabase.storage.from_('job-attachments').get_public_url(_sp)
+                                except Exception as _ue:
+                                    st.warning(f"{_label} upload failed (order will still submit without it): {_ue}")
+                                    return None
+
+                            _lpo_url    = _upload_batch_file(_batch_lpo_file, "LPO")
+                            _sample_url = _upload_batch_file(_batch_sample_file, "Sample photo")
+                            _terms_parts = []
+                            if _batch_30day:
+                                _terms_parts.append("30-Day Credit Terms")
+                            if _cart_has_balance and _batch_terms_notes.strip():
+                                _terms_parts.append(sanitize_string(_batch_terms_notes))
+                            _final_payment_terms = " | ".join(_terms_parts) if _terms_parts else None
                             _submitted = []
                             _batch_err = False
                             for _b_item in st.session_state.cart_items:
@@ -3373,7 +3417,8 @@ elif app_mode == "Raise Job Order":
                                     "sample_attached":  _batch_sample_attached,
                                     "sample_with":      sanitize_string(_batch_sample_with) if _batch_sample_attached == "Yes" else None,
                                     "lpo_file_url":     _lpo_url,
-                                    "payment_terms":    _batch_payment_terms,
+                                    "sample_file_url":  _sample_url,
+                                    "payment_terms":    _final_payment_terms,
                                     "sales_rep":        _batch_sales_rep if _batch_sales_rep != "— None / Walk-in —" else None,
                                     **_b_item
                                 }
@@ -3673,6 +3718,10 @@ elif app_mode == "Raise Job Order":
                 st.markdown("<br>", unsafe_allow_html=True)
                 _g_cart_total   = sum(x.get('total_amount',   0) for x in st.session_state.garment_cart_items)
                 _g_cart_deposit = sum(x.get('deposit_amount', 0) for x in st.session_state.garment_cart_items)
+                _g_cart_has_balance = any(
+                    float(x.get('total_amount', 0) or 0) != float(x.get('deposit_amount', 0) or 0)
+                    for x in st.session_state.garment_cart_items
+                )
                 st.markdown(
                     f'<div style="background:linear-gradient(135deg,#78350f,#92400e);'
                     f'color:#ffffff;border-radius:10px;padding:1rem 1.5rem;margin-bottom:1.25rem;'
@@ -3692,21 +3741,29 @@ elif app_mode == "Raise Job Order":
                     f'</div>', unsafe_allow_html=True)
 
                 st.markdown("### 📎 Attachments &amp; Terms — Applies to This Whole Batch")
-                _g_batch_lpo_file = st.file_uploader(
-                    "Upload LPO / Sample Photo (optional)", type=["pdf", "jpg", "jpeg", "png"],
+                _gba1, _gba2 = st.columns(2)
+                _g_batch_lpo_file = _gba1.file_uploader(
+                    "Upload LPO (optional) — goes to MD/FM", type=["pdf", "jpg", "jpeg", "png"],
                     key="garment_cart_lpo_upload")
+                _g_batch_sample_file = _gba2.file_uploader(
+                    "Upload Sample Photo (optional) — goes to the department", type=["pdf", "jpg", "jpeg", "png"],
+                    key="garment_cart_sample_upload")
                 _gsa1, _gsa2 = st.columns(2)
                 _g_batch_sample_attached = _gsa1.selectbox("Sample Attached?", ["No", "Yes"], key="garment_cart_sample_attached")
                 _g_batch_sample_with = _gsa2.text_input(
                     "Sample With (required if Yes)", key="garment_cart_sample_with",
                     placeholder="e.g. Front Desk, With Client, Production")
                 _gpt1, _gpt2 = st.columns(2)
-                _g_batch_payment_terms = _gpt1.selectbox(
-                    "Payment Terms", ["Standard (Deposit / Full Payment)", "30-Day Credit Terms"],
-                    key="garment_cart_payment_terms")
+                _g_batch_30day = _gpt1.checkbox("30-Day Credit Terms job", key="garment_cart_30day")
                 _g_batch_sales_rep = _gpt2.selectbox(
                     "Sales / Marketing Rep (who brought this job)",
                     ["— None / Walk-in —"] + list(SALES_REP_EMAILS.keys()), key="garment_cart_sales_rep")
+                _g_batch_terms_notes = ""
+                if _g_cart_has_balance:
+                    _g_batch_terms_notes = st.text_area(
+                        "Payment Terms Notes — this batch isn't fully paid; explain the arrangement for MD/FM",
+                        key="garment_cart_terms_notes",
+                        placeholder="e.g. Client to pay balance on collection; LPO attached; verbal agreement with MD on...")
 
                 _gsub_col, _gclr_col = st.columns([3, 1])
                 with _gsub_col:
@@ -3720,17 +3777,28 @@ elif app_mode == "Raise Job Order":
                             st.error("Sample is marked attached — enter who has it before submitting.")
                         else:
                             _g_pgid      = f"GPG-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000,9999)}"
-                            _g_lpo_url = None
-                            if _g_batch_lpo_file is not None:
+
+                            def _upload_g_batch_file(_f, _label):
+                                if _f is None:
+                                    return None
                                 try:
-                                    _g_file_bytes = _g_batch_lpo_file.getvalue()
-                                    _g_storage_path = f"{_g_pgid}/{_g_batch_lpo_file.name}"
+                                    _fb = _f.getvalue()
+                                    _sp = f"{_g_pgid}/{_f.name}"
                                     supabase.storage.from_('job-attachments').upload(
-                                        _g_storage_path, _g_file_bytes,
-                                        {"content-type": _g_batch_lpo_file.type or "application/octet-stream"})
-                                    _g_lpo_url = supabase.storage.from_('job-attachments').get_public_url(_g_storage_path)
-                                except Exception as _g_upl_err:
-                                    st.warning(f"LPO/sample upload failed (order will still submit without it): {_g_upl_err}")
+                                        _sp, _fb, {"content-type": _f.type or "application/octet-stream"})
+                                    return supabase.storage.from_('job-attachments').get_public_url(_sp)
+                                except Exception as _gue:
+                                    st.warning(f"{_label} upload failed (order will still submit without it): {_gue}")
+                                    return None
+
+                            _g_lpo_url    = _upload_g_batch_file(_g_batch_lpo_file, "LPO")
+                            _g_sample_url = _upload_g_batch_file(_g_batch_sample_file, "Sample photo")
+                            _g_terms_parts = []
+                            if _g_batch_30day:
+                                _g_terms_parts.append("30-Day Credit Terms")
+                            if _g_cart_has_balance and _g_batch_terms_notes.strip():
+                                _g_terms_parts.append(sanitize_string(_g_batch_terms_notes))
+                            _g_final_payment_terms = " | ".join(_g_terms_parts) if _g_terms_parts else None
                             _g_submitted = []
                             _g_batch_err = False
                             for _gb_item in st.session_state.garment_cart_items:
@@ -3744,7 +3812,8 @@ elif app_mode == "Raise Job Order":
                                     "sample_attached":  _g_batch_sample_attached,
                                     "sample_with":      sanitize_string(_g_batch_sample_with) if _g_batch_sample_attached == "Yes" else None,
                                     "lpo_file_url":     _g_lpo_url,
-                                    "payment_terms":    _g_batch_payment_terms,
+                                    "sample_file_url":  _g_sample_url,
+                                    "payment_terms":    _g_final_payment_terms,
                                     "sales_rep":        _g_batch_sales_rep if _g_batch_sales_rep != "— None / Walk-in —" else None,
                                     **_gb_item
                                 }
