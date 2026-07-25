@@ -4654,10 +4654,10 @@ elif app_mode == "Approved Orders Archive" and is_admin:
             'Delivered':            approved_orders[approved_orders['status'] == 'Delivered'],
         }
         _atabs = st.tabs([
-            f"✅ Approved ({len(_arch_by_status['Approved'])})",
-            f"⚙️ In Production ({len(_arch_by_status['In Production'])})",
-            f"📦 Ready ({len(_arch_by_status['Ready for Collection'])})",
-            f"🎯 Delivered ({len(_arch_by_status['Delivered'])})",
+            f"Approved ({len(_arch_by_status['Approved'])})",
+            f"In Production ({len(_arch_by_status['In Production'])})",
+            f"Ready ({len(_arch_by_status['Ready for Collection'])})",
+            f"Delivered ({len(_arch_by_status['Delivered'])})",
         ])
 
         def _render_archive_view(tab_df, status_label):
@@ -4686,7 +4686,7 @@ elif app_mode == "Approved Orders Archive" and is_admin:
                 })
             _csv_a = _av.to_csv(index=False).encode('utf-8')
             st.download_button(
-                label=f"⬇️ Export {status_label} CSV",
+                label=f"Export {status_label} CSV",
                 data=_csv_a,
                 file_name=f"ATP_{status_label.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv", key=f"arch_csv_{status_label}", use_container_width=False)
