@@ -628,6 +628,32 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
+def checkbox_multiselect(label, options, key_prefix, default=None, columns=4):
+    """
+    Click-only replacement for st.multiselect. Streamlit's multiselect has
+    a built-in searchable text cursor and lets Backspace silently delete
+    the last-selected chip — confusing for anyone expecting a plain
+    dropdown, and genuinely easy to lose a selection by accident. This
+    renders one checkbox per option across `columns` columns instead —
+    nothing to type into, nothing removable except by unchecking it.
+    Returns the list of currently-checked option labels, in the same
+    order `options` was given.
+    """
+    default = set(default or [])
+    if label:
+        st.markdown(
+            f'<div style="font-size:0.8rem;font-weight:600;color:#334155;margin-bottom:0.25rem;">{label}</div>',
+            unsafe_allow_html=True)
+    if not options:
+        return []
+    cols = st.columns(min(columns, len(options)))
+    checked = []
+    for i, opt in enumerate(options):
+        with cols[i % len(cols)]:
+            if st.checkbox(opt, value=opt in default, key=f"{key_prefix}_{opt}"):
+                checked.append(opt)
+    return checked
+
 def sanitize_string(input_str):
     """
     Defense-in-depth for the 130+ unsafe_allow_html=True blocks that render
@@ -3052,11 +3078,11 @@ elif app_mode == "Raise Job Order":
                     rp_imp_col  = _rpx3.text_input("Impressions",        value=_rd("impressions_colour"))
 
                     _rpbind_opts = ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"]
-                    rp_b_type = st.multiselect("Binding Selection", _rpbind_opts,
-                                                default=_rdl("binding_type", _rpbind_opts))
+                    rp_b_type = checkbox_multiselect("Binding Selection", _rpbind_opts, "rp_bind",
+                                                      default=_rdl("binding_type", _rpbind_opts))
                     _rplam_opts = ["Gloss Laminating", "Matt Laminating", "Soft Touch", "UV-Varnish"]
-                    rp_l_type = st.multiselect("Laminating Selection", _rplam_opts,
-                                                default=_rdl("laminating_type", _rplam_opts))
+                    rp_l_type = checkbox_multiselect("Laminating Selection", _rplam_opts, "rp_lam",
+                                                      default=_rdl("laminating_type", _rplam_opts))
 
                     st.info(f"Handled By: {st.session_state.user_email} | Date: {datetime.now().strftime('%Y-%m-%d')}")
                     rp_submit = st.form_submit_button("🔄 RESUBMIT FOR MANAGEMENT APPROVAL", use_container_width=True)
@@ -3368,9 +3394,11 @@ elif app_mode == "Raise Job Order":
                 item_pap_col  = _ix2.text_input("Colour / Ink Specs", value=_ed("paper_colour"), key=f"pi_papcol_{_pv}")
                 item_imp_col  = _ix3.text_input("Impressions",        value=_ed("impressions_colour"), key=f"pi_impcol_{_pv}")
                 _ibind_opts = ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"]
-                item_b_type = st.multiselect("Binding Selection",    _ibind_opts, default=_edl("binding_type", _ibind_opts), key=f"pi_bind_{_pv}")
+                item_b_type = checkbox_multiselect("Binding Selection", _ibind_opts, f"pi_bind_{_pv}",
+                                                    default=_edl("binding_type", _ibind_opts))
                 _ilam_opts  = ["Gloss Laminating", "Matt Laminating", "Soft Touch", "UV-Varnish"]
-                item_l_type = st.multiselect("Laminating Selection", _ilam_opts, default=_edl("laminating_type", _ilam_opts), key=f"pi_lam_{_pv}")
+                item_l_type = checkbox_multiselect("Laminating Selection", _ilam_opts, f"pi_lam_{_pv}",
+                                                    default=_edl("laminating_type", _ilam_opts))
                 st.info(f"Handled By: {st.session_state.user_email} | Date: {datetime.now().strftime('%Y-%m-%d')}")
                 add_item_clicked = st.form_submit_button(
                     "Update Item in Cart" if _editing_item else "Add Item to Cart",
@@ -4097,14 +4125,14 @@ elif app_mode == "Authorization Center" and is_admin:
                 label_visibility="collapsed",
             )
         with _fi_c2:
-            _status_filter = st.multiselect(
-                "Status filter",
-                options=["Pending Approval", "Pending Revision Approval"],
-                default=["Pending Approval", "Pending Revision Approval"],
-                key="ac_status_filter",
-                label_visibility="collapsed",
-                placeholder="Filter by status…",
-            )
+            st.markdown('<div style="font-size:0.7rem;color:#64748b;margin-bottom:0.15rem;">Filter by status</div>',
+                        unsafe_allow_html=True)
+            _sf1, _sf2 = st.columns(2)
+            _show_pending  = _sf1.checkbox("Pending Approval", value=True, key="ac_status_pending")
+            _show_revision = _sf2.checkbox("Pending Revision", value=True, key="ac_status_revision")
+            _status_filter = []
+            if _show_pending:  _status_filter.append("Pending Approval")
+            if _show_revision: _status_filter.append("Pending Revision Approval")
         with _fi_c3:
             if st.button("🔄 Refresh", use_container_width=True, key="ac_cache_refresh"):
                 # Manual cache bust — useful after an upstream data change
@@ -5185,9 +5213,9 @@ elif app_mode == "Production Layout Builder" and is_admin:
                     components.append({"machines": [_comp_machine], "impressions": _comp_imps})
                 st.markdown('<div class="form-group-header">Post-Press & Finishing Machines</div>', unsafe_allow_html=True)
                 _finishing_opts = [m for m in MACHINE_DATA.keys() if not any(k in m.upper() for k in ['SM', 'GTO', 'CANON'])]
-                lf_finishing = st.multiselect(
+                lf_finishing = checkbox_multiselect(
                     "Select Finishing Machines (applied in order: Die Cutter → Folder Gluer → Others)",
-                    _finishing_opts
+                    _finishing_opts, f"lf_finish_{_plb_row['id']}"
                 )
 
                 # ── Pre-flight sanity check — catches a fat-fingered quantity
@@ -5469,7 +5497,7 @@ elif app_mode == "My Order Tracker":
         st.markdown("<div style='height:1.75rem;'></div>", unsafe_allow_html=True)
 
         # ── In-memory search + filter bar (zero extra DB calls) ──────────
-        _s1, _s2, _s3 = st.columns([3, 2, 1])
+        _s1, _s3 = st.columns([5, 1])
         with _s1:
             _ot_search = st.text_input(
                 "Search",
@@ -5477,19 +5505,15 @@ elif app_mode == "My Order Tracker":
                 key="ot_search_q",
                 label_visibility="collapsed",
             )
-        with _s2:
-            _ot_status_filter = st.multiselect(
-                "Status",
-                options=["Pending Approval", "Pending Revision Approval",
-                         "Approved", "In Production", "At Warehouse", "Delivered", "Rejected"],
-                default=[],
-                key="ot_status_filter",
-                label_visibility="collapsed",
-                placeholder="Filter by status…",
-            )
         with _s3:
             if st.button("⟳ Refresh", use_container_width=True, key="ot_refresh_btn"):
                 st.rerun()
+        _ot_status_filter = checkbox_multiselect(
+            "Filter by status",
+            ["Pending Approval", "Pending Revision Approval",
+             "Approved", "In Production", "At Warehouse", "Delivered", "Rejected"],
+            "ot_status",
+        )
 
         # Apply filters to base DataFrame before tabs render
         _ot_filtered = my_all_orders.copy()
