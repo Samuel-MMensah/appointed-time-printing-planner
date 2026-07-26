@@ -87,6 +87,21 @@ if "editing_garment_cart_idx" not in st.session_state:
 if "last_raised_garment_batch" not in st.session_state:
     st.session_state.last_raised_garment_batch = []
 
+# Form-version counters — bump only on a SUCCESSFUL submission. Widget
+# keys include this number, so incrementing it makes Streamlit render
+# fresh (blank) widgets next rerun. Leaving it unchanged on a FAILED
+# submission (missing required field, accidental early Enter) means the
+# same widgets re-render with whatever the user already typed, instead
+# of clear_on_submit=True wiping everything regardless of outcome.
+if "press_item_form_v" not in st.session_state:
+    st.session_state.press_item_form_v = 0
+if "garment_item_form_v" not in st.session_state:
+    st.session_state.garment_item_form_v = 0
+if "press_resubmit_form_v" not in st.session_state:
+    st.session_state.press_resubmit_form_v = 0
+if "garment_resubmit_form_v" not in st.session_state:
+    st.session_state.garment_resubmit_form_v = 0
+
 # Authorization Center — pagination cursor
 if "ac_page" not in st.session_state:
     st.session_state.ac_page = 0
@@ -255,7 +270,7 @@ def _approval_recipients():
     """
     raw = st.secrets.get("APPROVAL_NOTIFY_EMAILS", "")
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametefe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
 
 
 def _scheduler_recipients():
@@ -2038,11 +2053,11 @@ if not st.session_state.authenticated:
 # ── 30-minute inactivity auto-logout ────────────────────────────────────────
 _now_ts   = datetime.now()
 _idle_sec = (_now_ts - st.session_state.get("last_activity_ts", _now_ts)).total_seconds()
-if st.session_state.get("authenticated") and _idle_sec > 1800:
+if st.session_state.get("authenticated") and _idle_sec > 7200:
     st.session_state.authenticated    = False
     st.session_state.user_profile     = None
     st.session_state.last_activity_ts = _now_ts
-    st.warning("⏱️ Session expired after 30 minutes of inactivity. Please log in again.")
+    st.warning("⏱️ Session expired after 2 hours of inactivity. Please log in again.")
     st.rerun()
 st.session_state.last_activity_ts = _now_ts   # refresh on every render
 
@@ -2645,7 +2660,7 @@ elif app_mode == "Raise Job Order":
         if _resub_dept == "GARMENT":
  
             # ── GARMENT RESUBMIT FORM ────────────────────────────────────
-            with st.form("resubmit_garment_form", clear_on_submit=True):
+            with st.form("resubmit_garment_form", clear_on_submit=False):
  
                 # ── Client Identity ──────────────────────────────────────
                 st.markdown('<div class="form-group-header">Client Identity & Contract Outline</div>',
@@ -2951,7 +2966,7 @@ elif app_mode == "Raise Job Order":
                     return [p.strip() for p in raw.split(",") if p.strip() in opts]
 
                 # ── PRESS RESUBMIT FORM ──────────────────────────────────────────
-                with st.form("resubmit_press_form", clear_on_submit=True):
+                with st.form("resubmit_press_form", clear_on_submit=False):
 
                     st.markdown('<div class="form-group-header">Client Identity & Contract Outline</div>',
                                 unsafe_allow_html=True)
@@ -3305,52 +3320,57 @@ elif app_mode == "Raise Job Order":
                         st.session_state.editing_cart_idx = None
                         st.rerun()
 
-            with st.form("add_cart_item_form", clear_on_submit=True):
+            _pv = st.session_state.press_item_form_v
+            with st.form("add_cart_item_form", clear_on_submit=False):
                 st.markdown('<div class="form-group-header">Client Identity — Shared Across All Items in This Batch</div>',
                             unsafe_allow_html=True)
                 _ci1, _ci2 = st.columns(2)
-                item_c_name  = _ci1.text_input("Customer Name ★", value=st.session_state.cart_client_name)
-                item_c_phone = _ci2.text_input("Telephone Number ★", value=st.session_state.cart_client_phone)
+                item_c_name  = _ci1.text_input("Customer Name ★", value=st.session_state.cart_client_name, key=f"pi_cname_{_pv}")
+                item_c_phone = _ci2.text_input("Telephone Number ★", value=st.session_state.cart_client_phone, key=f"pi_cphone_{_pv}")
                 st.markdown('<div class="form-group-header">Product Item Specifications</div>', unsafe_allow_html=True)
                 item_desc = st.text_area("Item Description ★", value=_ed("job_description"),
-                                         placeholder="e.g. Skillet Box (250gsm Gloss), A5 Brochure, Business Cards...")
+                                         placeholder="e.g. Skillet Box (250gsm Gloss), A5 Brochure, Business Cards...",
+                                         key=f"pi_desc_{_pv}")
                 _if1, _if2, _if3, _if4 = st.columns(4)
-                item_t_amt  = _if1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0, value=_edf("total_amount"))
-                item_d_amt  = _if2.number_input("Deposit Paid (GHS)",         min_value=0.0, step=100.0, value=_edf("deposit_amount"))
-                item_b_due  = _if3.date_input("Balance Deadline ★", value=_edd("balance_due_date"))
-                item_c_date = _if4.date_input("Collection Date ★",  value=_edd("date_of_collection"))
+                item_t_amt  = _if1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0, value=_edf("total_amount"), key=f"pi_tamt_{_pv}")
+                item_d_amt  = _if2.number_input("Deposit Paid (GHS)",         min_value=0.0, step=100.0, value=_edf("deposit_amount"), key=f"pi_damt_{_pv}")
+                item_b_due  = _if3.date_input("Balance Deadline ★", value=_edd("balance_due_date"), key=f"pi_bdue_{_pv}")
+                item_c_date = _if4.date_input("Collection Date ★",  value=_edd("date_of_collection"), key=f"pi_cdate_{_pv}")
                 item_receipt_no = st.text_input(
                     "Receipt Number (required if a deposit is entered)",
-                    value=_ed("receipt_no"), placeholder="e.g. RCT-00123")
+                    value=_ed("receipt_no"), placeholder="e.g. RCT-00123", key=f"pi_receipt_{_pv}")
                 _is1, _is2, _is3, _is4 = st.columns(4)
-                item_qty        = _is1.number_input("Quantity ★", min_value=0, step=500, value=_edi("qty_to_print"))
+                item_qty        = _is1.number_input("Quantity ★", min_value=0, step=500, value=_edi("qty_to_print"), key=f"pi_qty_{_pv}")
                 _ipc_opts       = ["", "OFFSET", "DIGITAL PRESS", "PACKAGING"]
                 _ipc_exist      = _ed("type_of_print")
                 item_type_print = _is2.selectbox("Print Category ★", _ipc_opts,
-                                                  index=_ipc_opts.index(_ipc_exist) if _ipc_exist in _ipc_opts else 0)
+                                                  index=_ipc_opts.index(_ipc_exist) if _ipc_exist in _ipc_opts else 0,
+                                                  key=f"pi_typrint_{_pv}")
                 _imat_opts      = ["", "Customer Material", "Company Material"]
                 _imat_exist     = _ed("material_source")
                 item_mat_source = _is3.selectbox("Material Source", _imat_opts,
-                                                  index=_imat_opts.index(_imat_exist) if _imat_exist in _imat_opts else 0)
+                                                  index=_imat_opts.index(_imat_exist) if _imat_exist in _imat_opts else 0,
+                                                  key=f"pi_matsrc_{_pv}")
                 _idel_opts      = ["Company Delivery", "Client Pickup"]
                 _idel_exist     = _ed("delivery_mode")
                 item_d_mode     = _is4.selectbox("Delivery Mode", _idel_opts,
-                                                  index=_idel_opts.index(_idel_exist) if _idel_exist in _idel_opts else 0)
+                                                  index=_idel_opts.index(_idel_exist) if _idel_exist in _idel_opts else 0,
+                                                  key=f"pi_delmode_{_pv}")
                 st.markdown('<div class="form-group-header">Material & Engineering Specifics</div>',
                             unsafe_allow_html=True)
                 _ip1, _ip2, _ip3, _ip4 = st.columns(4)
-                item_p_size   = _ip1.text_input("Print Size",     value=_ed("print_size"))
-                item_f_size   = _ip2.text_input("Finished Size",  value=_ed("finished_print_size"))
-                item_pap_type = _ip3.text_input("Paper Material", value=_ed("paper_type"))
-                item_pap_gsm  = _ip4.text_input("GSM",            value=_ed("gsm"))
+                item_p_size   = _ip1.text_input("Print Size",     value=_ed("print_size"), key=f"pi_psize_{_pv}")
+                item_f_size   = _ip2.text_input("Finished Size",  value=_ed("finished_print_size"), key=f"pi_fsize_{_pv}")
+                item_pap_type = _ip3.text_input("Paper Material", value=_ed("paper_type"), key=f"pi_paptype_{_pv}")
+                item_pap_gsm  = _ip4.text_input("GSM",            value=_ed("gsm"), key=f"pi_gsm_{_pv}")
                 _ix1, _ix2, _ix3 = st.columns(3)
-                item_pap_size = _ix1.text_input("Paper Size",         value=_ed("paper_size"))
-                item_pap_col  = _ix2.text_input("Colour / Ink Specs", value=_ed("paper_colour"))
-                item_imp_col  = _ix3.text_input("Impressions",        value=_ed("impressions_colour"))
+                item_pap_size = _ix1.text_input("Paper Size",         value=_ed("paper_size"), key=f"pi_papsize_{_pv}")
+                item_pap_col  = _ix2.text_input("Colour / Ink Specs", value=_ed("paper_colour"), key=f"pi_papcol_{_pv}")
+                item_imp_col  = _ix3.text_input("Impressions",        value=_ed("impressions_colour"), key=f"pi_impcol_{_pv}")
                 _ibind_opts = ["Perfect Binding", "Spiral Binding", "Saddle Stitching", "Comb Binding"]
-                item_b_type = st.multiselect("Binding Selection",    _ibind_opts, default=_edl("binding_type", _ibind_opts))
+                item_b_type = st.multiselect("Binding Selection",    _ibind_opts, default=_edl("binding_type", _ibind_opts), key=f"pi_bind_{_pv}")
                 _ilam_opts  = ["Gloss Laminating", "Matt Laminating", "Soft Touch", "UV-Varnish"]
-                item_l_type = st.multiselect("Laminating Selection", _ilam_opts, default=_edl("laminating_type", _ilam_opts))
+                item_l_type = st.multiselect("Laminating Selection", _ilam_opts, default=_edl("laminating_type", _ilam_opts), key=f"pi_lam_{_pv}")
                 st.info(f"Handled By: {st.session_state.user_email} | Date: {datetime.now().strftime('%Y-%m-%d')}")
                 add_item_clicked = st.form_submit_button(
                     "Update Item in Cart" if _editing_item else "Add Item to Cart",
@@ -3401,6 +3421,7 @@ elif app_mode == "Raise Job Order":
                         else:
                             st.session_state.cart_items.append(_new_item)
                             st.toast(f"Item {len(st.session_state.cart_items)} added to cart!", icon="✅")
+                        st.session_state.press_item_form_v += 1
                         st.rerun()
                     else:
                         st.error(f"Cannot add item — missing required fields: {', '.join(_item_missing)}")
@@ -3666,72 +3687,83 @@ elif app_mode == "Raise Job Order":
                         st.session_state.editing_garment_cart_idx = None
                         st.rerun()
 
-            with st.form("add_garment_cart_item_form", clear_on_submit=True):
+            _gv = st.session_state.garment_item_form_v
+            with st.form("add_garment_cart_item_form", clear_on_submit=False):
                 st.markdown('<div class="form-group-header">Client Identity — Shared Across All Garment Items</div>',
                             unsafe_allow_html=True)
                 _gi1, _gi2 = st.columns(2)
-                g_c_name  = _gi1.text_input("Customer Name ★", value=st.session_state.garment_cart_client_name)
-                g_c_phone = _gi2.text_input("Telephone Number ★", value=st.session_state.garment_cart_client_phone)
+                g_c_name  = _gi1.text_input("Customer Name ★", value=st.session_state.garment_cart_client_name, key=f"gi_cname_{_gv}")
+                g_c_phone = _gi2.text_input("Telephone Number ★", value=st.session_state.garment_cart_client_phone, key=f"gi_cphone_{_gv}")
                 st.markdown('<div class="form-group-header">Item Description & Financial</div>', unsafe_allow_html=True)
                 g_desc = st.text_area("Item / Job Description ★", value=_ged("job_description"),
-                                       placeholder="e.g. Custom T-Shirt DTF print, 50 pcs, White cotton...")
+                                       placeholder="e.g. Custom T-Shirt DTF print, 50 pcs, White cotton...",
+                                       key=f"gi_desc_{_gv}")
                 _gf1, _gf2, _gf3, _gf4 = st.columns(4)
-                g_t_amt  = _gf1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0, value=_gedf("total_amount"))
-                g_d_amt  = _gf2.number_input("Deposit Paid (GHS)",          min_value=0.0, step=100.0, value=_gedf("deposit_amount"))
-                g_b_due  = _gf3.date_input("Balance Deadline ★", value=_gedd("balance_due_date"))
-                g_c_date = _gf4.date_input("Collection Date ★",  value=_gedd("date_of_collection"))
+                g_t_amt  = _gf1.number_input("Total Item Amount (GHS) ★", min_value=0.0, step=100.0, value=_gedf("total_amount"), key=f"gi_tamt_{_gv}")
+                g_d_amt  = _gf2.number_input("Deposit Paid (GHS)",          min_value=0.0, step=100.0, value=_gedf("deposit_amount"), key=f"gi_damt_{_gv}")
+                g_b_due  = _gf3.date_input("Balance Deadline ★", value=_gedd("balance_due_date"), key=f"gi_bdue_{_gv}")
+                g_c_date = _gf4.date_input("Collection Date ★",  value=_gedd("date_of_collection"), key=f"gi_cdate_{_gv}")
                 g_receipt_no = st.text_input(
                     "Receipt Number (required if a deposit is entered)",
-                    value=_ged("receipt_no"), placeholder="e.g. RCT-00123")
+                    value=_ged("receipt_no"), placeholder="e.g. RCT-00123", key=f"gi_receipt_{_gv}")
                 _gq1, _gq2 = st.columns(2)
-                g_qty        = _gq1.number_input("Quantity to Print ★", min_value=0, step=10, value=_gedi("qty_to_print"))
+                g_qty        = _gq1.number_input("Quantity to Print ★", min_value=0, step=10, value=_gedi("qty_to_print"), key=f"gi_qty_{_gv}")
                 _gmat_opts   = ["", "Company Material", "Customer Material"]
                 _gmat_exist  = _ged("material_source")
                 g_mat_source = _gq2.selectbox("Material Source ★", _gmat_opts,
-                                               index=_gmat_opts.index(_gmat_exist) if _gmat_exist in _gmat_opts else 0)
+                                               index=_gmat_opts.index(_gmat_exist) if _gmat_exist in _gmat_opts else 0,
+                                               key=f"gi_matsrc_{_gv}")
                 st.markdown('<div class="form-group-header">Print Type & Dimensions</div>', unsafe_allow_html=True)
                 _gpt1, _gpt2 = st.columns(2)
                 _gprint_opts  = ["", "DTF", "Flexi Screen Print", "UV-DTF", "SAV", "Embroidery"]
                 _gprint_exist = _ged("print_type") or _ged("type_of_print")
                 g_print_type  = _gpt1.selectbox("Print Type ★", _gprint_opts,
-                                                 index=_gprint_opts.index(_gprint_exist) if _gprint_exist in _gprint_opts else 0)
+                                                 index=_gprint_opts.index(_gprint_exist) if _gprint_exist in _gprint_opts else 0,
+                                                 key=f"gi_ptype_{_gv}")
                 _gdel_opts    = ["Company Delivery", "Customer Pick-up"]
                 _gdel_exist   = _ged("delivery_mode")
                 g_delivery    = _gpt2.selectbox("Delivery Mode ★", _gdel_opts,
-                                                 index=_gdel_opts.index(_gdel_exist) if _gdel_exist in _gdel_opts else 0)
+                                                 index=_gdel_opts.index(_gdel_exist) if _gdel_exist in _gdel_opts else 0,
+                                                 key=f"gi_delmode_{_gv}")
                 _gps1, _gps2 = st.columns(2)
                 _gpsz_opts   = ["", "A1", "A2", "A3", "A4", "A5", "A6"]
                 _gpsz_exist  = _ged("print_size")
                 g_print_size = _gps1.selectbox("Print Size", _gpsz_opts,
-                                                index=_gpsz_opts.index(_gpsz_exist) if _gpsz_exist in _gpsz_opts else 0)
+                                                index=_gpsz_opts.index(_gpsz_exist) if _gpsz_exist in _gpsz_opts else 0,
+                                                key=f"gi_psize_{_gv}")
                 _gfsz_opts   = ["", "A1", "A2", "A3", "A4", "A5", "A6",
                                 "1YRD", "2YRDs", "3YRDs", "4YRDs", "5YRDs", "6YRDs",
                                 "3FTx4FT", "4FTx8FT"]
                 _gfsz_exist  = _ged("finished_print_size") or _ged("yardage")
                 g_fin_size   = _gps2.selectbox("Finished Print Size / Yardage", _gfsz_opts,
-                                                index=_gfsz_opts.index(_gfsz_exist) if _gfsz_exist in _gfsz_opts else 0)
+                                                index=_gfsz_opts.index(_gfsz_exist) if _gfsz_exist in _gfsz_opts else 0,
+                                                key=f"gi_fsize_{_gv}")
                 st.markdown('<div class="form-group-header">Material Description</div>', unsafe_allow_html=True)
                 g_mat_desc     = st.text_area("Material Description (fabric type, colour, etc.)",
                                                value=_ged("material_description"),
-                                               placeholder="e.g. Cotton Jersey White, Polyester Red...")
+                                               placeholder="e.g. Cotton Jersey White, Polyester Red...",
+                                               key=f"gi_matdesc_{_gv}")
                 g_add_comments = st.text_area("Additional Comments / Specifications",
                                                value=_ged("additional_comments"),
-                                               placeholder="Any other technical requirements...")
+                                               placeholder="Any other technical requirements...",
+                                               key=f"gi_comments_{_gv}")
                 st.markdown('<div class="form-group-header">Packaging & Delivery</div>', unsafe_allow_html=True)
                 _gpkg1, _gpkg2, _gpkg3 = st.columns(3)
                 _gpkgm_opts  = ["", "Box Packaging", "Bag Packaging", "None"]
                 _gpkgm_exist = _ged("packaging_mode")
                 g_pkg_mode  = _gpkg1.selectbox("Packaging Mode", _gpkgm_opts,
-                                                index=_gpkgm_opts.index(_gpkgm_exist) if _gpkgm_exist in _gpkgm_opts else 0)
-                g_qty_pack  = _gpkg2.number_input("Qty to Pack", min_value=0, step=1, value=_gedi("qty_to_pack"))
-                g_pkg_specs = _gpkg3.text_input("Packaging Specs", value=_ged("packaging_specs"))
+                                                index=_gpkgm_opts.index(_gpkgm_exist) if _gpkgm_exist in _gpkgm_opts else 0,
+                                                key=f"gi_pkgmode_{_gv}")
+                g_qty_pack  = _gpkg2.number_input("Qty to Pack", min_value=0, step=1, value=_gedi("qty_to_pack"), key=f"gi_qtypack_{_gv}")
+                g_pkg_specs = _gpkg3.text_input("Packaging Specs", value=_ged("packaging_specs"), key=f"gi_pkgspecs_{_gv}")
                 _gloc1, _gloc2 = st.columns(2)
-                g_location = _gloc1.text_input("Delivery Location", value=_ged("delivery_location"))
-                g_contact  = _gloc2.text_input("Delivery Contact Person", value=_ged("delivery_contact"))
+                g_location = _gloc1.text_input("Delivery Location", value=_ged("delivery_location"), key=f"gi_location_{_gv}")
+                g_contact  = _gloc2.text_input("Delivery Contact Person", value=_ged("delivery_contact"), key=f"gi_contact_{_gv}")
                 st.markdown('<div class="form-group-header">Process / Technical Info</div>', unsafe_allow_html=True)
                 g_process_info = st.text_area("Process / Technical Information",
                                                value=_ged("process_info"),
-                                               placeholder="Stitching count, thread colour, press temperature...")
+                                               placeholder="Stitching count, thread colour, press temperature...",
+                                               key=f"gi_procinfo_{_gv}")
                 st.info(f"Handled By: {st.session_state.user_email} | Date: {datetime.now().strftime('%Y-%m-%d')}")
                 g_add_item_clicked = st.form_submit_button(
                     "💾 Update Item in Cart" if _g_editing_item else "Add Item to Cart",
@@ -3794,6 +3826,7 @@ elif app_mode == "Raise Job Order":
                         else:
                             st.session_state.garment_cart_items.append(_new_g_item)
                             st.toast(f"Garment item {len(st.session_state.garment_cart_items)} added to cart!", icon="🧵")
+                        st.session_state.garment_item_form_v += 1
                         st.rerun()
                     else:
                         st.error(f"Cannot add item — missing required fields: {', '.join(_g_missing)}")
