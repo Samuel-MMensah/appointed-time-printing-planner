@@ -255,7 +255,7 @@ def _approval_recipients():
     """
     raw = st.secrets.get("APPROVAL_NOTIFY_EMAILS", "")
     emails = [e.strip() for e in raw.split(",") if e.strip()]
-    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametepe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
+    return emails or ["jacqueline.afful@appointedtime.com.gh", "emmanuel.ametefe@appointedtime.com.gh", "enoch.obeng@appointedtime.com.gh"]
 
 
 def _scheduler_recipients():
@@ -2669,6 +2669,33 @@ elif app_mode == "Raise Job Order":
                 rg_receipt_no = st.text_input(
                     "Receipt Number (required if a deposit is entered)",
                     value=_rd("receipt_no"), placeholder="e.g. RCT-00123")
+
+                st.markdown('<div class="form-group-header">Attachments &amp; Terms</div>',
+                            unsafe_allow_html=True)
+                _rga1, _rga2 = st.columns(2)
+                rg_lpo_file = _rga1.file_uploader(
+                    "Upload LPO (optional) — goes to MD/FM", type=["pdf", "jpg", "jpeg", "png"],
+                    key="rg_resubmit_lpo")
+                rg_sample_file = _rga2.file_uploader(
+                    "Upload Sample Photo (optional) — goes to the department", type=["pdf", "jpg", "jpeg", "png"],
+                    key="rg_resubmit_sample")
+                _rgsa1, _rgsa2 = st.columns(2)
+                rg_sample_attached = _rgsa1.selectbox(
+                    "Sample Attached?", ["No", "Yes"],
+                    index=1 if _rd("sample_attached") == "Yes" else 0, key="rg_resubmit_sample_attached")
+                rg_sample_with = _rgsa2.text_input(
+                    "Sample With (required if Yes)", value=_rd("sample_with"), key="rg_resubmit_sample_with")
+                rg_30day = st.checkbox(
+                    "30-Day Credit Terms job",
+                    value="30-Day Credit Terms" in _rd("payment_terms"), key="rg_resubmit_30day")
+                rg_terms_notes = ""
+                if rg_t_amt != rg_d_amt:
+                    _rg_existing_terms = _rd("payment_terms")
+                    _rg_existing_notes = _rg_existing_terms.split("|", 1)[1].strip() if "|" in _rg_existing_terms else (
+                        _rg_existing_terms if "30-Day Credit Terms" not in _rg_existing_terms else "")
+                    rg_terms_notes = st.text_area(
+                        "Payment Terms Notes — not fully paid; explain the arrangement for MD/FM",
+                        value=_rg_existing_notes, key="rg_resubmit_terms_notes")
  
                 # ── Quantity & Material Source ───────────────────────────
                 st.markdown('<div class="form-group-header">Production Quantity & Sourcing</div>',
@@ -2769,10 +2796,35 @@ elif app_mode == "Raise Job Order":
                     if not rg_mat_source:        _rg_missing.append("Material Source")
                     if rg_d_amt > 0 and not rg_receipt_no.strip():
                         _rg_missing.append("Receipt Number (required since a deposit was entered)")
+                    if rg_sample_attached == "Yes" and not rg_sample_with.strip():
+                        _rg_missing.append("Sample With (required since a sample is marked attached)")
  
                     if not _rg_missing:
                         _rg_orig_pgid = resubmit_data.get("parent_group_id", None)
- 
+                        _rg_upload_pgid = _rg_orig_pgid or f"RGPG-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+                        def _upload_rg_resubmit_file(_f, _label):
+                            if _f is None:
+                                return None
+                            try:
+                                _fb = _f.getvalue()
+                                _sp = f"{_rg_upload_pgid}/{_f.name}"
+                                supabase.storage.from_('job-attachments').upload(
+                                    _sp, _fb, {"content-type": _f.type or "application/octet-stream"})
+                                return supabase.storage.from_('job-attachments').get_public_url(_sp)
+                            except Exception as _rgue:
+                                st.warning(f"{_label} upload failed (order will still submit without it): {_rgue}")
+                                return None
+
+                        _rg_lpo_url    = _upload_rg_resubmit_file(rg_lpo_file, "LPO")
+                        _rg_sample_url = _upload_rg_resubmit_file(rg_sample_file, "Sample photo")
+                        _rg_terms_parts = []
+                        if rg_30day:
+                            _rg_terms_parts.append("30-Day Credit Terms")
+                        if rg_t_amt != rg_d_amt and rg_terms_notes.strip():
+                            _rg_terms_parts.append(sanitize_string(rg_terms_notes))
+                        _rg_final_terms = " | ".join(_rg_terms_parts) if _rg_terms_parts else None
+
                         # Build material_description_rows for PDF compatibility
                         _rg_mat_rows = []
                         for _rg_ml in rg_mat_desc.strip().splitlines():
@@ -2792,6 +2844,11 @@ elif app_mode == "Raise Job Order":
                             "total_amount":         float(rg_t_amt),
                             "deposit_amount":       float(rg_d_amt),
                             "receipt_no":           sanitize_string(rg_receipt_no) if rg_d_amt > 0 else None,
+                            "sample_attached":      rg_sample_attached,
+                            "sample_with":          sanitize_string(rg_sample_with) if rg_sample_attached == "Yes" else None,
+                            "lpo_file_url":         _rg_lpo_url,
+                            "sample_file_url":      _rg_sample_url,
+                            "payment_terms":        _rg_final_terms,
                             "balance_due_date":     rg_b_due.isoformat(),
                             "date_of_collection":   rg_c_date.isoformat(),
                             "qty_to_print":         int(rg_qty),
@@ -2917,6 +2974,33 @@ elif app_mode == "Raise Job Order":
                         "Receipt Number (required if a deposit is entered)",
                         value=_rd("receipt_no"), placeholder="e.g. RCT-00123")
 
+                    st.markdown('<div class="form-group-header">Attachments &amp; Terms</div>',
+                                unsafe_allow_html=True)
+                    _rpa1, _rpa2 = st.columns(2)
+                    rp_lpo_file = _rpa1.file_uploader(
+                        "Upload LPO (optional) — goes to MD/FM", type=["pdf", "jpg", "jpeg", "png"],
+                        key="rp_resubmit_lpo")
+                    rp_sample_file = _rpa2.file_uploader(
+                        "Upload Sample Photo (optional) — goes to the department", type=["pdf", "jpg", "jpeg", "png"],
+                        key="rp_resubmit_sample")
+                    _rpsa1, _rpsa2 = st.columns(2)
+                    rp_sample_attached = _rpsa1.selectbox(
+                        "Sample Attached?", ["No", "Yes"],
+                        index=1 if _rd("sample_attached") == "Yes" else 0, key="rp_resubmit_sample_attached")
+                    rp_sample_with = _rpsa2.text_input(
+                        "Sample With (required if Yes)", value=_rd("sample_with"), key="rp_resubmit_sample_with")
+                    rp_30day = st.checkbox(
+                        "30-Day Credit Terms job",
+                        value="30-Day Credit Terms" in _rd("payment_terms"), key="rp_resubmit_30day")
+                    rp_terms_notes = ""
+                    if rp_t_amt != rp_d_amt:
+                        _rp_existing_terms = _rd("payment_terms")
+                        _rp_existing_notes = _rp_existing_terms.split("|", 1)[1].strip() if "|" in _rp_existing_terms else (
+                            _rp_existing_terms if "30-Day Credit Terms" not in _rp_existing_terms else "")
+                        rp_terms_notes = st.text_area(
+                            "Payment Terms Notes — not fully paid; explain the arrangement for MD/FM",
+                            value=_rp_existing_notes, key="rp_resubmit_terms_notes")
+
                     st.markdown('<div class="form-group-header">Production Quantity & Category</div>',
                                 unsafe_allow_html=True)
                     _rpq1, _rpq2, _rpq3 = st.columns(3)
@@ -2972,9 +3056,35 @@ elif app_mode == "Raise Job Order":
                         if not rp_type_print:      _rp_missing.append("Print Category")
                         if rp_d_amt > 0 and not rp_receipt_no.strip():
                             _rp_missing.append("Receipt Number (required since a deposit was entered)")
+                        if rp_sample_attached == "Yes" and not rp_sample_with.strip():
+                            _rp_missing.append("Sample With (required since a sample is marked attached)")
 
                         if not _rp_missing:
                             _rp_orig_pgid = resubmit_data.get("parent_group_id", None)
+                            _rp_upload_pgid = _rp_orig_pgid or f"RPPG-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+                            def _upload_rp_resubmit_file(_f, _label):
+                                if _f is None:
+                                    return None
+                                try:
+                                    _fb = _f.getvalue()
+                                    _sp = f"{_rp_upload_pgid}/{_f.name}"
+                                    supabase.storage.from_('job-attachments').upload(
+                                        _sp, _fb, {"content-type": _f.type or "application/octet-stream"})
+                                    return supabase.storage.from_('job-attachments').get_public_url(_sp)
+                                except Exception as _rpue:
+                                    st.warning(f"{_label} upload failed (order will still submit without it): {_rpue}")
+                                    return None
+
+                            _rp_lpo_url    = _upload_rp_resubmit_file(rp_lpo_file, "LPO")
+                            _rp_sample_url = _upload_rp_resubmit_file(rp_sample_file, "Sample photo")
+                            _rp_terms_parts = []
+                            if rp_30day:
+                                _rp_terms_parts.append("30-Day Credit Terms")
+                            if rp_t_amt != rp_d_amt and rp_terms_notes.strip():
+                                _rp_terms_parts.append(sanitize_string(rp_terms_notes))
+                            _rp_final_terms = " | ".join(_rp_terms_parts) if _rp_terms_parts else None
+
                             rp_payload = {
                                 "customer_name":       sanitize_string(rp_c_name),
                                 "telephone_number":    sanitize_string(rp_c_phone),
@@ -2982,6 +3092,11 @@ elif app_mode == "Raise Job Order":
                                 "total_amount":        float(rp_t_amt),
                                 "deposit_amount":      float(rp_d_amt),
                                 "receipt_no":          sanitize_string(rp_receipt_no) if rp_d_amt > 0 else None,
+                                "sample_attached":     rp_sample_attached,
+                                "sample_with":         sanitize_string(rp_sample_with) if rp_sample_attached == "Yes" else None,
+                                "lpo_file_url":        _rp_lpo_url,
+                                "sample_file_url":     _rp_sample_url,
+                                "payment_terms":       _rp_final_terms,
                                 "balance_due_date":    rp_b_due.isoformat(),
                                 "date_of_collection":  rp_c_date.isoformat(),
                                 "qty_to_print":        int(rp_qty),

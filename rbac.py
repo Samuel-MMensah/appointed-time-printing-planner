@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-import streamlit as st
-# Assuming your client is initialized in a file named 'db.py'
-
 """
 rbac.py — Role-Based Access Control for the Appointed Time Enterprise Hub.
 
