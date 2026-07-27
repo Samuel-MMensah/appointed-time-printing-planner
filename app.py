@@ -349,13 +349,17 @@ def _approval_cc_recipients():
 def notify_order_approved(order_data: dict) -> None:
     """Email the order creator when management approves their order.
     Finance and Warehouse are CC'd on every approval (see
-    _approval_cc_recipients) so both see it land before it's their turn."""
+    _approval_cc_recipients), and the sales rep (if one was selected at
+    raise time) is CC'd too — they were only told the order was
+    *submitted* before; this is the "it actually went through" email."""
     d = order_data
     recipient = str(d.get("created_by", "") or "")
     if "@" not in recipient:
         return
     api_key      = st.secrets.get("RESEND_API_KEY", "")
     sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+    _rep_name  = d.get('sales_rep')
+    _rep_email = SALES_REP_EMAILS.get(_rep_name) if _rep_name else None
     html = _email_shell(
         accent_bg="#064e3b",
         heading="✅ ORDER APPROVED",
@@ -365,10 +369,13 @@ def notify_order_approved(order_data: dict) -> None:
             ("Order No",       str(d.get('job_order_no', '—')), "#0369a1"),
             ("Customer",       str(d.get('customer_name', '—')), None),
             ("Contract Value", f"{CURRENCY} {float(d.get('total_amount',0) or 0):,.2f}", None),
+            ("Sales Rep",      str(_rep_name or '—'), None),
         ],
         footer=f"Approved by: {d.get('approved_by','Management')} &middot; Date: {d.get('approval_date','')}",
     )
     _recipients = [recipient] + [e for e in _approval_cc_recipients() if e.lower() != recipient.lower()]
+    if _rep_email and _rep_email.lower() not in [r.lower() for r in _recipients]:
+        _recipients.append(_rep_email)
     _send_resend_email(
         api_key, sender_email, _recipients,
         subject=f"Approved: Order {d.get('job_order_no','—')} is live",
@@ -1501,6 +1508,16 @@ def generate_pdf_manifest(ticket):
         ))
         elements.append(Spacer(1, 8))
 
+    _pdf_sales_rep = str(ticket.get('sales_rep', '') or '').strip()
+    if _pdf_sales_rep:
+        elements.append(Paragraph(
+            f"SALES REP: {_pdf_sales_rep}",
+            ParagraphStyle('SalesRepNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
+                           textColor=colors.HexColor("#334155"), backColor=colors.HexColor("#f8fafc"),
+                           borderColor=colors.HexColor("#e2e8f0"), borderWidth=1, borderPadding=6)
+        ))
+        elements.append(Spacer(1, 8))
+
     type_print = str(ticket.get('type_of_print', '') or '').strip() or '—'
     mat_source = str(ticket.get('material_source', '') or '').strip() or '—'
     cat_data = [
@@ -1798,6 +1815,16 @@ def generate_garment_pdf_manifest(ticket):
             ParagraphStyle('GSampleNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
                            textColor=colors.HexColor("#0369a1"), backColor=colors.HexColor("#f0f9ff"),
                            borderColor=colors.HexColor("#bae6fd"), borderWidth=1, borderPadding=6)
+        ))
+        elements.append(Spacer(1, 5))
+
+    _g_pdf_sales_rep = safe(ticket.get('sales_rep'), '')
+    if _g_pdf_sales_rep:
+        elements.append(Paragraph(
+            f"SALES REP: {_g_pdf_sales_rep}",
+            ParagraphStyle('GSalesRepNote', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5,
+                           textColor=colors.HexColor("#334155"), backColor=colors.HexColor("#f8fafc"),
+                           borderColor=colors.HexColor("#e2e8f0"), borderWidth=1, borderPadding=6)
         ))
         elements.append(Spacer(1, 5))
 
