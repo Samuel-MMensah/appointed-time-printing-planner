@@ -613,6 +613,35 @@ def notify_collection_due(order_data: dict, days_remaining: int) -> None:
     )
 
 
+def notify_warehouse_aging(order_data: dict, days_at_warehouse: int) -> None:
+    """Alert management when an order has sat At Warehouse, uncollected,
+    for longer than the threshold — cash tied up in unclaimed goods is
+    the same category of risk as an overdue balance, so this reuses
+    _collection_alert_recipients rather than inventing a new list."""
+    d, days = order_data, days_at_warehouse
+    api_key      = st.secrets.get("RESEND_API_KEY", "")
+    sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+    _bal = max(0.0, float(d.get('total_amount', 0) or 0) - float(d.get('deposit_amount', 0) or 0))
+    html = _email_shell(
+        accent_bg="#b45309",
+        heading=f"📦 UNCOLLECTED AT WAREHOUSE — {days} DAY(S)",
+        subheading="",
+        intro="",
+        rows=[
+            ("Order No",     str(d.get('job_order_no', '—')), "#b45309"),
+            ("Customer",     str(d.get('customer_name', '—')), None),
+            ("Days Waiting", str(days), "#b45309"),
+            ("Balance Due",  f"{CURRENCY} {_bal:,.2f}", None),
+        ],
+        footer="",
+    )
+    _send_resend_email(
+        api_key, sender_email, _collection_alert_recipients(),
+        subject=f"Uncollected {days}d: {d.get('customer_name','—')} — {d.get('job_order_no','—')}",
+        html_body=html, log_context="warehouse-aging",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 5. PREMIUM CSS TYPOGRAPHY & STYLING
 # ═══════════════════════════════════════════════════════════════════
@@ -2242,7 +2271,7 @@ with st.sidebar:
     if rbac.check_access(rbac.ADMIN_ROLES | rbac.FINANCE_ROLES):
         admin_modules.append("Dispatch")
     if is_admin:
-        admin_modules += ["Authorization Center", "Approved Orders Archive"]
+        admin_modules += ["Authorization Center", "Approved Orders Archive", "Audit Log"]
     
     # ── Auth Centre pending-count badge (zero extra DB calls — uses TTL cache) ──
     _ac_pending_n  = 0
@@ -2628,6 +2657,44 @@ if app_mode == "Command Center":
                 f'<div style="text-align:right;font-weight:700;color:#d97706;">'
                 f'{CURRENCY} {_ds["_bal"]:,.2f} outstanding</div></div>',
                 unsafe_allow_html=True)
+
+    # ── C8a-ii: Uncollected-at-Warehouse aging alerts ────────────────────────
+    # Threshold: 7 days sitting At Warehouse uncollected. Not specified by
+    # the business — a reasonable default, easy to change (the single
+    # WAREHOUSE_AGING_THRESHOLD_DAYS constant below) once real usage shows
+    # what's actually normal for this shop.
+    WAREHOUSE_AGING_THRESHOLD_DAYS = 7
+    if not approved_orders_df.empty and 'warehouse_date' in approved_orders_df.columns:
+        _wh_df = approved_orders_df[approved_orders_df['status'] == 'At Warehouse'].copy()
+        if not _wh_df.empty:
+            _wh_df['_wdate'] = pd.to_datetime(_wh_df['warehouse_date'], errors='coerce', utc=True)
+            _wh_df['_wdays'] = _wh_df['_wdate'].apply(
+                lambda t: (pd.Timestamp.now(tz='UTC') - t).days if pd.notna(t) else None)
+            _wh_aging_rows = _wh_df[
+                (_wh_df['_wdays'].notna()) & (_wh_df['_wdays'] >= WAREHOUSE_AGING_THRESHOLD_DAYS)
+            ]
+            if not _wh_aging_rows.empty:
+                st.markdown(
+                    '<div class="section-header" style="margin-top:1.75rem;">Uncollected at Warehouse</div>',
+                    unsafe_allow_html=True)
+            for _, _wa in _wh_aging_rows.iterrows():
+                _wbal = max(0.0,
+                    float(_wa.get('total_amount', 0) or 0) - float(_wa.get('deposit_amount', 0) or 0))
+                st.markdown(
+                    f'<div style="background:#fffbeb;border:1px solid #fde68a;border-left:5px solid #b45309;'
+                    f'border-radius:8px;padding:0.75rem 1.1rem;margin-bottom:0.5rem;display:flex;'
+                    f'justify-content:space-between;align-items:center;">'
+                    f'<div><span style="font-size:0.7rem;font-weight:700;color:#b45309;text-transform:uppercase;'
+                    f'letter-spacing:0.05em;">WAITING {int(_wa["_wdays"])} DAY(S)</span><br>'
+                    f'<strong style="color:#0f172a;">{_wa.get("customer_name","—")}</strong>'
+                    f'<span style="color:#64748b;font-size:0.85rem;"> · {_wa.get("job_order_no","—")}</span></div>'
+                    f'<div style="text-align:right;font-weight:700;color:#b45309;">'
+                    f'{CURRENCY} {_wbal:,.2f} outstanding</div></div>',
+                    unsafe_allow_html=True)
+                _wnk = f"notif_whaging_{_wa.get('id','')}"
+                if _wnk not in st.session_state:
+                    notify_warehouse_aging(_wa.to_dict(), int(_wa['_wdays']))
+                    st.session_state[_wnk] = True
 
     # ── C8b: Extended analytics row ──────────────────────────────────────────
     if not approved_orders_df.empty:
@@ -5150,6 +5217,23 @@ elif app_mode == "Approved Orders Archive" and is_admin:
                         except Exception as _del_err:
                             st.error(f"Deletion failed: {str(_del_err)}")
 
+                if str(target_row.get('status', '')) == 'Delivered':
+                    st.markdown("<hr style='margin:1rem 0;border-top:1px solid #e2e8f0;'>", unsafe_allow_html=True)
+                    st.markdown(
+                        '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-left:4px solid #3b82f6;'
+                        'border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.5rem;font-size:0.82rem;'
+                        'color:#1e40af;">Finalized by mistake? Reopening reverts the order to '
+                        '<strong>At Warehouse</strong> so Dispatch can be redone correctly. Any payment '
+                        'already recorded is untouched — only the status reverts.</div>',
+                        unsafe_allow_html=True)
+                    if st.button("↩ Reopen Order (undo Finalize Dispatch)",
+                                 key=f"reopen_{target_row['id']}", use_container_width=True):
+                        if update_order_lifecycle_status(str(target_row['id']), 'At Warehouse'):
+                            st.success(f"{selected_order_no} reopened — back to At Warehouse.")
+                            st.rerun()
+                        else:
+                            st.error("Reopen failed. Check logs for details.")
+
 
 # ═══════════════════════════════════════════════════════════════════
 # ROUTE 4a: WAREHOUSE (receiving + finance handoff — see warehouse.py's
@@ -6034,4 +6118,83 @@ elif app_mode == "Production Layout Builder" and not is_admin:
         '<div style="font-size:1rem;color:#64748b;max-width:420px;margin:0 auto;line-height:1.6;">'
         'The Production Layout Builder is reserved for plant administrators. '
         'Use the Raise Job Order module to submit orders for the production pipeline.'
+        '</div></div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════════
+# ROUTE: AUDIT LOG (admin-only — who did what, when)
+#
+# This is a "current state" summary, not a true historical change log --
+# it surfaces the created_by/approved_by/timestamp fields already
+# captured on each order, across every status including Rejected. It
+# will NOT show, for example, a value that was edited and then edited
+# again -- only the current values plus who's on record for each
+# lifecycle step. A genuine field-level history would need a separate
+# audit_log table with insert/update triggers -- real, larger
+# infrastructure, not something to bolt on inside this same view.
+# ═══════════════════════════════════════════════════════════════════
+elif app_mode == "Audit Log" and is_admin:
+    st.markdown('<div class="section-header">Audit Log</div>', unsafe_allow_html=True)
+    st.caption(
+        "Who raised, approved, and moved each order — current recorded state, "
+        "not a field-by-field edit history."
+    )
+    _al_orders = get_db_job_orders_multi_status([
+        "Pending Approval", "Pending Revision Approval", "Approved",
+        "In Production", "At Warehouse", "Ready for Collection",
+        "Delivered", "Rejected",
+    ])
+    if _al_orders.empty:
+        st.info("No orders recorded yet.")
+    else:
+        _al_s1, _al_s2 = st.columns([3, 1])
+        with _al_s1:
+            _al_search = st.text_input(
+                "Search", placeholder="Customer · Order No · Created By · Approved By…",
+                key="al_search", label_visibility="collapsed")
+        with _al_s2:
+            if st.button("⟳ Refresh", use_container_width=True, key="al_refresh"):
+                st.rerun()
+        _al_statuses = sorted(_al_orders['status'].dropna().unique().tolist())
+        _al_status_filter = checkbox_multiselect("Filter by status", _al_statuses, "al_status")
+
+        _al_view = _al_orders.copy()
+        if _al_status_filter:
+            _al_view = _al_view[_al_view['status'].isin(_al_status_filter)]
+        if _al_search:
+            _q = _al_search.strip().lower()
+            _al_view = _al_view[_al_view.apply(
+                lambda r: _q in str(r.get('customer_name', '')).lower()
+                or _q in str(r.get('job_order_no', '')).lower()
+                or _q in str(r.get('created_by', '')).lower()
+                or _q in str(r.get('approved_by', '')).lower(),
+                axis=1)]
+
+        st.caption(f"{len(_al_view)} order(s)")
+        _al_display = pd.DataFrame({
+            "Order No":     _al_view.get('job_order_no', ''),
+            "Customer":     _al_view.get('customer_name', ''),
+            "Status":       _al_view.get('status', ''),
+            "Created By":   _al_view.get('created_by', ''),
+            "Order Date":   _al_view.get('order_date', ''),
+            "Approved By":  _al_view.get('approved_by', ''),
+            "Approval Date": _al_view.get('approval_date', ''),
+            "Warehouse Date": _al_view.get('warehouse_date', ''),
+            "Delivered Date": _al_view.get('delivered_date', ''),
+            "Receipt No":   _al_view.get('receipt_no', ''),
+        })
+        st.dataframe(_al_display, use_container_width=True, hide_index=True)
+
+        _al_csv = _al_display.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="⬇️ Download Audit Log CSV", data=_al_csv,
+            file_name=f"ATP_audit_log_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv", key="al_csv_dl", use_container_width=True,
+        )
+
+elif app_mode == "Audit Log" and not is_admin:
+    st.markdown(
+        '<div style="margin-top:3rem;text-align:center;"><div style="font-size:3rem;margin-bottom:1rem;">🔒</div>'
+        '<div style="font-size:1.5rem;font-weight:800;color:#0f172a;margin-bottom:0.5rem;">Restricted Access</div>'
+        '<div style="font-size:1rem;color:#64748b;max-width:420px;margin:0 auto;line-height:1.6;">'
+        'The Audit Log is reserved for administrators.'
         '</div></div>', unsafe_allow_html=True)
