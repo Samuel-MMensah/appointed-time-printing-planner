@@ -132,6 +132,7 @@ SALES_REP_EMAILS = {
     "Bertha Tackie": "bertha.tackie@appointedtime.com.gh",
     "Christian Mante": "christian.mante@appointedtime.com.gh",
     "Jacqueline Afful": "jacqueline.afful@appointedtime.com.gh",
+    "Mohammed Seidu Bunyamin": "m.seidu@appointedtime.com.gh",
 }
 
 
