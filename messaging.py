@@ -57,6 +57,67 @@ def _department_recipients(department: str) -> list[str]:
     return [e.strip() for e in raw.split(",") if e.strip()]
 
 
+def _job_detail_rows(order_data: dict) -> list:
+    """
+    Same job-spec rows app.py's notification functions build (description,
+    quantity, materials, delivery) — duplicated here rather than imported,
+    matching this module's existing self-contained design (see module
+    docstring: app.py imports FROM here, not the other way around).
+    Press and Garment store materials under different field names, so
+    this branches on department instead of guessing one set of keys.
+    """
+    d = order_data
+    dept = str(d.get('department', '') or '').strip().upper()
+    rows = []
+
+    desc = d.get('job_description') or d.get('item_description')
+    if desc:
+        rows.append(("Job Description", str(desc)))
+
+    qty = d.get('qty_to_print') or d.get('print_qty')
+    if qty:
+        rows.append(("Quantity", str(qty)))
+
+    if dept == "GARMENT":
+        ptype = d.get('print_type') or d.get('type_of_print')
+        if ptype:
+            rows.append(("Print Type", str(ptype)))
+        matsrc = d.get('material_source')
+        if matsrc:
+            rows.append(("Material Source", str(matsrc)))
+        matdesc = d.get('material_description')
+        if matdesc:
+            rows.append(("Material", str(matdesc)))
+        pkg = d.get('packaging_mode')
+        if pkg:
+            rows.append(("Packaging", str(pkg)))
+    else:
+        ptype = d.get('type_of_print')
+        if ptype:
+            rows.append(("Print Category", str(ptype)))
+        matsrc = d.get('material_source')
+        if matsrc:
+            rows.append(("Material Source", str(matsrc)))
+        paper, gsm = d.get('paper_type'), d.get('gsm')
+        if paper or gsm:
+            rows.append(("Paper", f"{paper or '—'}{f' ({gsm}gsm)' if gsm else ''}"))
+        binding = d.get('binding_type')
+        if binding and str(binding).strip().lower() != "none":
+            rows.append(("Binding", str(binding)))
+        laminating = d.get('laminating_type')
+        if laminating and str(laminating).strip().lower() != "none":
+            rows.append(("Laminating", str(laminating)))
+
+    delivery = d.get('delivery_mode')
+    if delivery:
+        rows.append(("Delivery Mode", str(delivery)))
+    collection = d.get('date_of_collection')
+    if collection:
+        rows.append(("Collection Date", str(collection)))
+
+    return rows
+
+
 def _send_resend_email(recipients, subject, html_body, log_context):
     """Same pattern as app.py's version: secrets are read by the caller on
     the main thread; the worker thread only does the HTTP call, making no
@@ -173,6 +234,7 @@ def send_departmental_alert(order_data: dict) -> bool:
         ("Contract Value",
          f"{CURRENCY} {float(order_data.get('total_amount', 0) or 0):,.2f}"),
     ]
+    _rows.extend(_job_detail_rows(order_data))
     _sample_url = order_data.get("sample_file_url")
     if _sample_url:
         _rows.append(("Sample Photo", f'<a href="{_sample_url}">View Sample</a>'))

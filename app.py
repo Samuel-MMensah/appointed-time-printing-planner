@@ -227,6 +227,69 @@ def _send_resend_email(api_key, sender_email, recipients, subject, html_body, lo
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _job_detail_rows(order_data: dict) -> list:
+    """
+    Builds the job-spec rows (description, quantity, materials, delivery)
+    shared across notification emails, so a recipient — especially
+    procurement or production — can plan straight from the email without
+    opening the app first. Press and Garment orders store materials under
+    different field names, so this branches on department rather than
+    guessing one set of keys and leaving the other department blank.
+    Only includes a row when the underlying value is actually present —
+    an email full of "—" placeholders is worse than a shorter one.
+    """
+    d = order_data
+    dept = str(d.get('department', '') or '').strip().upper()
+    rows = []
+
+    desc = d.get('job_description') or d.get('item_description')
+    if desc:
+        rows.append(("Job Description", str(desc)))
+
+    qty = d.get('qty_to_print') or d.get('print_qty')
+    if qty:
+        rows.append(("Quantity", str(qty)))
+
+    if dept == "GARMENT":
+        ptype = d.get('print_type') or d.get('type_of_print')
+        if ptype:
+            rows.append(("Print Type", str(ptype)))
+        matsrc = d.get('material_source')
+        if matsrc:
+            rows.append(("Material Source", str(matsrc)))
+        matdesc = d.get('material_description')
+        if matdesc:
+            rows.append(("Material", str(matdesc)))
+        pkg = d.get('packaging_mode')
+        if pkg:
+            rows.append(("Packaging", str(pkg)))
+    else:
+        ptype = d.get('type_of_print')
+        if ptype:
+            rows.append(("Print Category", str(ptype)))
+        matsrc = d.get('material_source')
+        if matsrc:
+            rows.append(("Material Source", str(matsrc)))
+        paper, gsm = d.get('paper_type'), d.get('gsm')
+        if paper or gsm:
+            rows.append(("Paper", f"{paper or '—'}{f' ({gsm}gsm)' if gsm else ''}"))
+        binding = d.get('binding_type')
+        if binding and str(binding).strip().lower() != "none":
+            rows.append(("Binding", str(binding)))
+        laminating = d.get('laminating_type')
+        if laminating and str(laminating).strip().lower() != "none":
+            rows.append(("Laminating", str(laminating)))
+
+    delivery = d.get('delivery_mode')
+    if delivery:
+        rows.append(("Delivery Mode", str(delivery)))
+    collection = d.get('date_of_collection')
+    if collection:
+        rows.append(("Collection Date", str(collection)))
+
+    return rows
+
+
 def _email_shell(accent_bg, heading, subheading, intro, rows, footer, accent_fg="#ffffff"):
     """
     One shared HTML letterhead for every outbound notification, replacing
@@ -315,6 +378,8 @@ def send_resend_notification(payload):
         ("Contract Value:", f"{CURRENCY} {float(payload.get('total_amount', 0) or 0):,.2f}", None),
         ("Sales Rep:",      str(payload.get('sales_rep') or '—'),        None),
     ]
+    for _label, _value in _job_detail_rows(payload):
+        _rows.append((_label + ":", _value, None))
     _lpo_url = payload.get('lpo_file_url')
     if _lpo_url:
         _rows.append(("LPO:", f'<a href="{_lpo_url}">Open LPO</a>', None))
@@ -361,17 +426,20 @@ def notify_order_approved(order_data: dict) -> None:
     sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
     _rep_name  = d.get('sales_rep')
     _rep_email = SALES_REP_EMAILS.get(_rep_name) if _rep_name else None
+    _rows = [
+        ("Order No",       str(d.get('job_order_no', '—')), "#0369a1"),
+        ("Customer",       str(d.get('customer_name', '—')), None),
+        ("Contract Value", f"{CURRENCY} {float(d.get('total_amount',0) or 0):,.2f}", None),
+        ("Sales Rep",      str(_rep_name or '—'), None),
+    ]
+    for _label, _value in _job_detail_rows(d):
+        _rows.append((_label, _value, None))
     html = _email_shell(
         accent_bg="#064e3b",
         heading="✅ ORDER APPROVED",
         subheading=f"Appointed Time Printing &mdash; {d.get('department','PRESS')} Dept",
         intro="Your order has been <strong>approved</strong> and is now active in the production pipeline.",
-        rows=[
-            ("Order No",       str(d.get('job_order_no', '—')), "#0369a1"),
-            ("Customer",       str(d.get('customer_name', '—')), None),
-            ("Contract Value", f"{CURRENCY} {float(d.get('total_amount',0) or 0):,.2f}", None),
-            ("Sales Rep",      str(_rep_name or '—'), None),
-        ],
+        rows=_rows,
         footer=f"Approved by: {d.get('approved_by','Management')} &middot; Date: {d.get('approval_date','')}",
     )
     _recipients = [recipient] + [e for e in _approval_cc_recipients() if e.lower() != recipient.lower()]
@@ -449,15 +517,19 @@ def notify_sent_to_warehouse(order_data: dict) -> None:
     d = order_data
     api_key      = st.secrets.get("RESEND_API_KEY", "")
     sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+    _rows = [
+        ("Order No", str(d.get('job_order_no', '—')), "#4338ca"),
+        ("Customer", str(d.get('customer_name', '—')), None),
+    ]
+    for _label, _value in _job_detail_rows(d):
+        if _label in ("Job Description", "Quantity"):  # identity/quantity only — no money, per warehouse.py's design
+            _rows.append((_label, _value, None))
     html = _email_shell(
         accent_bg="#4f46e5",
         heading="📥 ORDER SENT TO WAREHOUSE",
         subheading="Appointed Time Printing &mdash; Warehouse Receiving",
         intro="Production has completed this order and marked it ready for pickup at the warehouse.",
-        rows=[
-            ("Order No", str(d.get('job_order_no', '—')), "#4338ca"),
-            ("Customer", str(d.get('customer_name', '—')), None),
-        ],
+        rows=_rows,
         footer="Confirm receipt in the Warehouse module.",
     )
     _send_resend_email(
@@ -480,15 +552,23 @@ def notify_ready_for_finance(order_data: dict) -> bool:
     d = order_data
     api_key      = st.secrets.get("RESEND_API_KEY", "")
     sender_email = st.secrets.get("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+    _total   = float(d.get('total_amount', 0) or 0)
+    _deposit = float(d.get('deposit_amount', 0) or 0)
+    _rows = [
+        ("Order No",       str(d.get('job_order_no', '—')), "#065f46"),
+        ("Customer",       str(d.get('customer_name', '—')), None),
+        ("Contract Value", f"{CURRENCY} {_total:,.2f}", None),
+        ("Balance Due",    f"{CURRENCY} {max(0.0, _total - _deposit):,.2f}", None),
+    ]
+    for _label, _value in _job_detail_rows(d):
+        if _label in ("Job Description", "Quantity"):
+            _rows.append((_label, _value, None))
     html = _email_shell(
         accent_bg="#065f46",
         heading="📦 READY FOR DISPATCH",
         subheading="Appointed Time Printing &mdash; Finance",
         intro="Warehouse has prepared this order for delivery. Collect any outstanding balance and finalize dispatch.",
-        rows=[
-            ("Order No", str(d.get('job_order_no', '—')), "#065f46"),
-            ("Customer", str(d.get('customer_name', '—')), None),
-        ],
+        rows=_rows,
         footer="Finalize in the Dispatch module.",
     )
     try:
@@ -875,16 +955,22 @@ def fetch_pending_orders_cached() -> pd.DataFrame:
 @st.cache_data(ttl=60, show_spinner=False)
 def get_approved_orders_cached() -> pd.DataFrame:
     """
-    Cached fetch for approved orders — Command Center & Archive.
+    Cached fetch for the active order pipeline — Command Center.
+    Covers every status from Approved through At Warehouse (everything
+    that's been approved and hasn't finished yet) — not just orders
+    literally still sitting at 'Approved', unstarted. Command Center's
+    totals used to drop an order's value the instant Production Board
+    moved it to 'In Production', even though it's still an active job,
+    just further along the pipeline.
     TTL 60 s: avoids unbounded full-table scan on every rerun.
-    Call get_approved_orders_cached.clear() after any Approve/Archive write.
+    Call get_approved_orders_cached.clear() after any status-changing write.
     Session-state-blind by design; check auth in the caller.
     """
     try:
         res = (
             supabase.table('job_orders')
             .select("*")
-            .eq('status', 'Approved')
+            .in_('status', ['Approved', 'In Production', 'At Warehouse'])
             .execute()
         )
         return pd.DataFrame(res.data)
